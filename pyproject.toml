@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cc-autopilot-notify"
+version = "0.1.0"
+description = "Notifications and unattended auto-answer for Claude Code"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+
+[project.scripts]
+cc-autopilot-notify = "cc_autopilot_notify.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["cc_autopilot_notify*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
