@@ -38,8 +38,15 @@ def should_spawn(root: Path, plugin_root: str, now: float | None = None) -> Deci
     age = now - hb["at"]
     if age >= POLL_STALE_SECONDS:
         return Decision("spawn", f"heartbeat stale by {age:.0f}s")
+    pid = hb.get("pid")
     if hb.get("plugin_root") != plugin_root:
-        return Decision("replace", "plugin root changed", stale_pid=hb.get("pid"))
+        # Only a heartbeat that names its process can be replaced safely. A
+        # legacy (or pid-less) daemon cannot be stopped, and spawning anyway
+        # would leave two loops answering the same questions.
+        if isinstance(pid, int) and not isinstance(pid, bool):
+            return Decision("replace", "plugin root changed", stale_pid=pid)
+        return Decision(
+            "skip", "unmanaged daemon alive with no pid; run /cc-autopilot:migrate")
     return Decision("skip", f"daemon alive ({age:.0f}s old)")
 
 
@@ -57,6 +64,8 @@ def acquire_lock(root: Path):
 
 def start(root: Path, plugin_root: str) -> int:
     root = Path(root)
+    # A fresh machine has no state root yet; the log cannot be opened without it.
+    root.mkdir(parents=True, exist_ok=True)
     log_path = root / LOG_NAME
     if log_path.exists() and log_path.stat().st_size > LOG_MAX_BYTES:
         os.truncate(log_path, 0)

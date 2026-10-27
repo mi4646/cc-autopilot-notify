@@ -58,34 +58,41 @@ def _ensure_daemon() -> int:
 
     from . import config, daemon_control, hook_common
 
+    # SessionStart stdout can be injected into the model's context, so every
+    # status line goes to stderr. Nothing here may fail the session.
     try:
         cfg = config.load()
+        if not config.daemon_enabled(cfg):
+            print("daemon: disabled by config", file=sys.stderr)
+            return 0
+        path = config.default_path()
+        if not path.exists():
+            config.write_default(path)
+            print(f"daemon: wrote default config to {path}", file=sys.stderr)
+        root = hook_common.state_root()
+        plugin_root = os.environ.get("CLAUDE_PLUGIN_ROOT") or str(
+            Path(__file__).resolve().parent.parent)
+        decision = daemon_control.should_spawn(root, plugin_root)
+        if decision.action == "skip":
+            print(f"daemon: {decision.reason}", file=sys.stderr)
+            return 0
+        if decision.action == "replace" and decision.stale_pid:
+            daemon_control.stop(root)
+            if not daemon_control.wait_gone(decision.stale_pid):
+                print(
+                    f"daemon: pid {decision.stale_pid} did not exit; "
+                    "not starting a duplicate", file=sys.stderr)
+                return 0
+        pid = daemon_control.start(root, plugin_root)
+        print(f"daemon: started pid {pid} ({decision.reason})", file=sys.stderr)
+        return 0
     except config.ConfigError as exc:
         # A SessionStart hook must never block the session on a bad config.
         print(f"daemon: config error: {exc}", file=sys.stderr)
         return 0
-    if not config.daemon_enabled(cfg):
-        print("daemon: disabled by config")
+    except Exception as exc:  # noqa: BLE001 - a hook must never wedge Claude Code
+        print(f"daemon: unexpected error: {exc}", file=sys.stderr)
         return 0
-    path = config.default_path()
-    if not path.exists():
-        config.write_default(path)
-        print(f"daemon: wrote default config to {path}")
-    root = hook_common.state_root()
-    plugin_root = os.environ.get("CLAUDE_PLUGIN_ROOT") or str(
-        Path(__file__).resolve().parent.parent)
-    decision = daemon_control.should_spawn(root, plugin_root)
-    if decision.action == "skip":
-        print(f"daemon: {decision.reason}")
-        return 0
-    if decision.action == "replace" and decision.stale_pid:
-        daemon_control.stop(root)
-        if not daemon_control.wait_gone(decision.stale_pid):
-            print(f"daemon: pid {decision.stale_pid} did not exit; not starting a duplicate")
-            return 0
-    pid = daemon_control.start(root, plugin_root)
-    print(f"daemon: started pid {pid} ({decision.reason})")
-    return 0
 
 
 def _stop_daemon() -> int:
