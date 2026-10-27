@@ -1,5 +1,8 @@
 # cc-autopilot-notify 插件化实现计划
 
+> **状态：IMPLEMENTED（2026-10-27）。本计划已执行完毕，代码以仓库当前实现为准。**
+> 执行过程中修正了本文件里的若干片段（`stop()` 的 pid 校验、`${CLAUDE_PLUGIN_ROOT}` 加引号、迁移写入顺序、命令命名空间等）；**不要照抄下文代码**，以 `cc_autopilot_notify/` 与 `tests/` 的现状为准。下方未勾选的步骤框是历史记录，不代表待办。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 把 cc-autopilot-notify 改造成可用 `/plugin` 安装的 Claude Code 插件，仓库兼作 marketplace，并保留 Tier A/B/C 行为。
