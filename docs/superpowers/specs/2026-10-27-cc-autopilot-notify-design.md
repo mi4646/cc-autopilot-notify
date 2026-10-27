@@ -235,7 +235,14 @@ PreToolUse(AskUserQuestion)
        5. 记录结果并推送「已自动选择 X」
 ```
 
-**驱动方式（已实测，非假设）**：
+> **2026-10-27 实测修正**：`conversation.read.prompt` 对 Claude Code 的问答
+> 面板**恒为 null**（130 秒探针、11 次采样、0 命中），即使 `task_state` 为
+> `attention`。故路径 A 改为 A′：以 `task_state == "attention"` 作为面板门，
+> 以 hook 的结构化选项决定答案，以 `pane.read` 的文本做一致性校验，以
+> `pane.send_key`（方向键 + Enter）提交。`conversation.choose` 保留在
+> `pebrel_runtime` 中但不再被调用。端到端已验证通过。
+
+**驱动方式（原设计，已被 A′ 取代，保留作记录）**：
 
 - CLI 没有 `conversation` 子命令。`pebrel ctl conversation` 返回 `error: unrecognized subcommand 'conversation'`。
 - 必须直连运行时：读 `%APPDATA%\Pebrel\runtime.port`（首行端口，次行 32-hex token），`TCP 127.0.0.1:<port>`，JSON Lines 收发，请求体为 `{"protocol":"nebula.runtime","version":1,"id":...,"token":...,"method":"conversation.choose","params":{...}}`。
@@ -295,8 +302,9 @@ PermissionRequest(AskUserQuestion)
 | `presence.py` | 前后台判定 | `powershell.exe` |
 | `judge.py` | 推荐标记解析 + 模型判卷 | stdlib（HTTP） |
 | `channels/feishu.py` | 飞书交互卡片 | stdlib `urllib` |
-| `channels/terminal.py` | OSC 9 终端通知 | stdlib |
-| `channels/pebrel.py` | 委托 Pebrel 原生通知（可选） | `pebrel` CLI（仅 `notify-test` 类） |
+> 2026-10-27 变更（-owner 决定）：`channels/terminal.py` 与 `channels/pebrel.py`
+> 已移除。Pebrel 自带 Claude 通知弹框，双份弹窗太吵，Windows 侧交给 Pebrel
+> 原生；本项目只保留飞书推送 + 问答静默跳过。
 | `state.py` | 未决项持久化（JSON 文件 + `flock`） | stdlib |
 | `config.py` | 配置加载与校验 | stdlib |
 | `doctor.py` | 自检命令（见第 7 节） | stdlib |
