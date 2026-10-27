@@ -182,4 +182,4 @@ Code settings, start the daemon, and ask one real question.
 - 实测 `test-channel feishu` → `feishu: sent`（HTTP 200 且业务 code=0）。
 - doctor：`feishu webhook: configured`、daemon 心跳 PASS。直装写入 settings.json
   的 hooks 在插件版的 `legacy install` 检查中会显示为 legacy，需运行
-  `/cc-autopilot:migrate`。
+  `/cc-autopilot-notify:migrate`。

@@ -114,10 +114,10 @@ def _legacy_install() -> Check:
         for item in items or []:
             for hook in item.get("hooks") or []:
                 # Same predicate as migration: a foreign run_hook.py is neither
-                # removed by /cc-autopilot:migrate nor a reason to demand it.
+                # removed by /cc-autopilot-notify:migrate nor a reason to demand it.
                 if _is_our_hook(hook):
                     return Check("legacy install", "FAIL",
-                                 "legacy hooks in settings.json; run /cc-autopilot:migrate")
+                                 "legacy hooks in settings.json; run /cc-autopilot-notify:migrate")
     return Check("legacy install", "PASS", "no legacy entries in settings.json")
 
 

@@ -46,7 +46,7 @@ def should_spawn(root: Path, plugin_root: str, now: float | None = None) -> Deci
         if isinstance(pid, int) and not isinstance(pid, bool):
             return Decision("replace", "plugin root changed", stale_pid=pid)
         return Decision(
-            "skip", "unmanaged daemon alive with no pid; run /cc-autopilot:migrate")
+            "skip", "unmanaged daemon alive with no pid; run /cc-autopilot-notify:migrate")
     return Decision("skip", f"daemon alive ({age:.0f}s old)")
 
 

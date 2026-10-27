@@ -68,8 +68,8 @@
 ├── hooks/
 │   └── hooks.json           # 全部 hook 注册，命令使用 ${CLAUDE_PLUGIN_ROOT}
 ├── commands/
-│   ├── doctor.md            # /cc-autopilot:doctor
-│   └── migrate.md           # /cc-autopilot:migrate
+│   ├── doctor.md            # /cc-autopilot-notify:doctor
+│   └── migrate.md           # /cc-autopilot-notify:migrate
 ├── scripts/
 │   ├── ensure-daemon.sh     # SessionStart 入口（薄包装）
 │   ├── migrate.sh           # 旧直装 → 插件
@@ -82,7 +82,7 @@
 ```
 
 - 版本：`pyproject.toml`、`.claude-plugin/plugin.json`、`marketplace.json` 三处同步为 `0.2.0`。
-- 插件命令命名空间由插件名决定：`/cc-autopilot:doctor`、`/cc-autopilot:migrate`。
+- 插件命令命名空间由插件名决定：`/cc-autopilot-notify:doctor`、`/cc-autopilot-notify:migrate`。
 - Python 依赖保持为零（仅标准库），`requires-python >= 3.11` 不变。
 
 ---
@@ -181,7 +181,7 @@
 
 ## 7. 迁移（旧直装 → 插件）
 
-`scripts/migrate.sh`，由 `/cc-autopilot:migrate` 命令触发，**不自动执行**。
+`scripts/migrate.sh`，由 `/cc-autopilot-notify:migrate` 命令触发，**不自动执行**。
 
 步骤：
 
@@ -193,7 +193,7 @@
 6. 若旧 `env.CLAUDE_AFK_TIMEOUT_MS` 存在：保留（Tier C 需要），并在输出中提示用户确认。
 7. 幂等：第二次运行检测到无旧条目时输出「nothing to migrate」并返回 0。
 
-`doctor` 新增检查 `legacy install`：settings.json 中仍存在同时含 `run_hook.py` 与 `cc_autopilot_notify` 的条目时 FAIL，提示运行 `/cc-autopilot:migrate`；没有则为 PASS。
+`doctor` 新增检查 `legacy install`：settings.json 中仍存在同时含 `run_hook.py` 与 `cc_autopilot_notify` 的条目时 FAIL，提示运行 `/cc-autopilot-notify:migrate`；没有则为 PASS。
 
 ---
 

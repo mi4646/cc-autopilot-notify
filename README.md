@@ -44,7 +44,7 @@ mode `0600`):
 ### Upgrading from the legacy direct install
 
 ```bash
-/cc-autopilot:migrate
+/cc-autopilot-notify:migrate
 ```
 
 It removes only our `run_hook.py` entries from `settings.json` (entries that
