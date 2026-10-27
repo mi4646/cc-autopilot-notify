@@ -81,6 +81,8 @@ CC_AUTOPILOT_SETTINGS="$W/settings.json" CC_AUTOPILOT_CONFIG="$W/cfg/config.json
   CC_AUTOPILOT_UNIT="$W/unit.service" /var/www/cc-autopilot-notify/install.sh >/dev/null \
   || { echo "re-install aborted on a same-value string"; exit 1; }
 
+chmod 644 "$W/settings.json"
+MODE_BEFORE=$(stat -c '%a' "$W/settings.json")
 CC_AUTOPILOT_SETTINGS="$W/settings.json" CC_AUTOPILOT_CONFIG="$W/cfg/config.json" \
   CC_AUTOPILOT_UNIT="$W/unit.service" /var/www/cc-autopilot-notify/uninstall.sh >/dev/null
 python3 - "$W/settings.json" <<'PY'
@@ -88,5 +90,40 @@ import json, sys
 d = json.load(open(sys.argv[1]))
 assert str(d["env"]["CLAUDE_AFK_TIMEOUT_MS"]) == "600000", "original value not restored"
 PY
+# The atomic rewrite must not silently change the file mode (mkstemp is 0600).
+[ "$(stat -c '%a' "$W/settings.json")" = "$MODE_BEFORE" ] \
+  || { echo "uninstall changed settings.json mode"; exit 1; }
 rm -rf "$W"
 echo "OK: real write path, foreign cwd, value restore"
+
+# --- Non-UTF-8 settings (Windows editors write UTF-16) -------------------
+# uninstall must abort BEFORE removing the unit: crashing after it is gone
+# leaves the service deleted but our hooks still registered.
+U=$(mktemp -d)
+python3 - "$U" <<'PY'
+import json, pathlib, sys
+d = pathlib.Path(sys.argv[1])
+(d / "settings.json").write_bytes(json.dumps({
+    "env": {"CLAUDE_AFK_TIMEOUT_MS": "300000"},
+    "hooks": {"PreToolUse": [{"hooks": [{"type": "command",
+                                         "command": "python run_hook.py pre_tool"}]}]},
+}).encode("utf-16"))
+(d / "unit.service").write_text("unit\n")
+(d / "settings.before").write_bytes((d / "settings.json").read_bytes())
+PY
+
+if CC_AUTOPILOT_SETTINGS="$U/settings.json" CC_AUTOPILOT_CONFIG="$U/cfg/config.json" \
+     CC_AUTOPILOT_UNIT="$U/unit.service" ./uninstall.sh >/dev/null 2>&1; then
+  echo "uninstall accepted a non-UTF-8 settings.json"; exit 1
+fi
+[ -f "$U/unit.service" ] || { echo "unit removed despite uninstall aborting"; exit 1; }
+cmp -s "$U/settings.json" "$U/settings.before" || { echo "settings.json was rewritten"; exit 1; }
+
+if CC_AUTOPILOT_DRY_RUN=1 CC_AUTOPILOT_SETTINGS="$U/settings.json" \
+     CC_AUTOPILOT_CONFIG="$U/cfg/config.json" CC_AUTOPILOT_UNIT="$U/unit.service" \
+     ./install.sh >/dev/null 2>&1; then
+  echo "install accepted a non-UTF-8 settings.json"; exit 1
+fi
+cmp -s "$U/settings.json" "$U/settings.before" || { echo "install rewrote settings.json"; exit 1; }
+rm -rf "$U"
+echo "OK: non-UTF-8 settings refused without touching anything"

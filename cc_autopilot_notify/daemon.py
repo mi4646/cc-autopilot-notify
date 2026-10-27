@@ -16,18 +16,29 @@ import time
 from pathlib import Path
 from typing import Callable
 
-from . import config, judge, pebrel_runtime, presence, state
+from . import config, judge, pebrel_runtime, presence, screen, state
 
 log = logging.getLogger(__name__)
 
 POLL_SECONDS = 1.0
 HEARTBEAT_SECONDS = 10.0
 
+# A session that never shows up in any Pebrel pane cannot be answered, and the
+# record is retried every second until it is dropped. Give it the time we would
+# otherwise have spent waiting to answer, then forget it: keeping it costs one
+# runtime round trip per second, forever.
+LOCATE_GRACE_SECONDS = 300.0
+
+# A failing locate is different: it may be a transient runtime outage, so the
+# record is kept and only the log is throttled.
+LOCATE_WARN_EVERY_SECONDS = 600.0
+_locate_warned_at: dict[str, float] = {}
+
 
 @dataclasses.dataclass
 class Deps:
     read: Callable[[state.Pending], dict]
-    choose: Callable[[state.Pending, int, str, int], dict]  # (pending, epoch, prompt_id, option)
+    press: Callable[[state.Pending, str, int], dict]        # (pending, key, repeat)
     foreground: Callable[[], bool | None]
     judge_fn: Callable[[dict], int]
     notify: Callable[[str], None]
@@ -61,16 +72,28 @@ def _tick_one(pending: state.Pending, now: float, root: Path, cfg: dict,
               deps: Deps, actions: list[str]) -> None:
     sid = pending.session_id
 
-    # Claude Code's hook payload has no pane identity, so resolve it from Pebrel
-    # before reading. Without this the runtime refuses pane 0 outright.
-    if not pending.pane_id or not pending.window_id:
+    # The hook records PEBREL_PANE_ID directly. Only fall back to Pebrel's own
+    # session association when that is missing: `agents.list` reports
+    # session_id=None for panes started by `agent-start`, so depending on it
+    # would make auto-answer silently skip those sessions.
+    if not pending.pane_id:
         try:
             located = deps.locate(sid)
         except Exception as exc:  # noqa: BLE001
-            log.warning("daemon: cannot locate a pane for %s (%s)", sid, exc)
+            # A runtime outage must not spam a line a second: log once, then at
+            # most every LOCATE_WARN_EVERY_SECONDS while it persists.
+            last = _locate_warned_at.get(sid)
+            if last is None or now - last >= LOCATE_WARN_EVERY_SECONDS:
+                _locate_warned_at[sid] = now
+                log.warning("daemon: cannot locate a pane for %s (%s)", sid, exc)
             return
         if located is None:
-            log.info("daemon: %s is not running in any Pebrel pane yet", sid)
+            # No pane means the session is not running under Pebrel (a /tmp
+            # session, a dead terminal). That will not change, so waiting past
+            # the grace period is pure waste: drop the record once.
+            if now - pending.appeared_at >= LOCATE_GRACE_SECONDS:
+                state.forget(sid, root)
+                log.info("daemon: %s never appeared in any Pebrel pane; dropping", sid)
             return
         pending.window_id, pending.pane_id = located
         state.record(pending, root)
@@ -81,10 +104,11 @@ def _tick_one(pending: state.Pending, now: float, root: Path, cfg: dict,
         log.warning("daemon: read failed for %s (%s)", sid, exc)
         return
 
-    prompt = reading.get("prompt")
-    if prompt is None:
-        actions.append(f"{sid}: answered or cancelled; clearing")
-        state.forget(sid, root)
+    # The dialog gate. `conversation.read.prompt` never carries Claude Code's
+    # AskUserQuestion (130s live probe: 0 hits even at attention), so Presence
+    # of the dialog is what `task_state == "attention"` reports. Anything else
+    # means the turn is running, finished, or the pane is gone: not our moment.
+    if reading.get("state") != "attention":
         return
 
     revision = reading.get("revision")
@@ -100,33 +124,8 @@ def _tick_one(pending: state.Pending, now: float, root: Path, cfg: dict,
     if not should_fire(pending, now, threshold):
         return
 
-    # The two fields `conversation.choose` requires and `conversation.read` does
-    # not always supply in the place we look. Missing either is a hard stop for
-    # this tick: sending a guess is what produces a wrong answer.
-    prompt_id = pebrel_runtime.prompt_id_of(reading)
-    epoch = pebrel_runtime.epoch_of(reading)
-    if prompt_id is None or epoch is None:
-        # Log what the server actually sent. The live shape has never been
-        # observed, so a bare "prompt_id=None" would restart the investigation
-        # from zero next time.
-        shape = sorted(prompt.keys()) if isinstance(prompt, dict) else type(prompt).__name__
-        log.warning("daemon: prompt shape for %s: %s", sid, shape)
-        _give_up(sid, root, deps, f"{sid}: cannot address the prompt "
-                                   f"(prompt_id={prompt_id!r}, epoch={epoch!r}, "
-                                   f"prompt keys={shape})")
-        return
-
-    try:
-        options = pebrel_runtime.question_options(prompt)
-    except pebrel_runtime.RuntimeError as exc:
-        _give_up(sid, root, deps, f"{sid}: unrecognised question shape ({exc})")
-        return
-    if not options:
-        _give_up(sid, root, deps, f"{sid}: prompt has no options")
-        return
-
+    # Which option: the hook's structured data (judge), never the screen.
     question = (pending.questions or [{}])[0]
-    question = {**question, "options": options}
     try:
         choice = deps.judge_fn(question)
     except Exception as exc:  # noqa: BLE001 - one bad question must not stop the loop
@@ -134,41 +133,37 @@ def _tick_one(pending: state.Pending, now: float, root: Path, cfg: dict,
         _give_up(sid, root, deps, f"{sid}: judge failed ({exc})")
         return
 
-    for attempt in (1, 2):
-        try:
-            result = deps.choose(pending, epoch, prompt_id, choice)
-        except Exception as exc:  # noqa: BLE001 - refusal and transport alike
-            result = {"ok": False, "error": {"code": "raised", "message": str(exc)}}
-        if result.get("ok", True) is not False:
-            actions.append(f"{sid}: auto-answered option {choice}")
-            state.touch(sid, root, when=now, revision=revision)
-            deps.notify(f"Auto-answered: option {choice}")
-            return
-        log.info("daemon: choose refused for %s attempt %d (%s)",
-                 sid, attempt, (result.get("error") or {}).get("code"))
-        if attempt == 2:
-            break
-        # The user may have answered between our read and our choose.
-        try:
-            again = deps.read(pending)
-        except Exception:  # noqa: BLE001
-            break
-        if again.get("prompt") is None:
-            state.forget(sid, root)
-            return
-        # Never reuse an index across a changed prompt: it referred to the old
-        # option list. Drop the record and let the next tick judge afresh.
-        if again.get("revision") != revision:
-            actions.append(f"{sid}: prompt changed while answering; re-judging next tick")
-            state.touch(sid, root, when=now, revision=again.get("revision"))
-            return
-        prompt_id = pebrel_runtime.prompt_id_of(again) or prompt_id
+    # Screen agreement: the recorded labels must appear as numbered rows with a
+    # visible cursor, or we refuse. This is what stops a key press from landing
+    # on a different dialog than the question we recorded.
+    try:
+        presses = screen.plan(question, str(reading.get("text") or ""), choice)
+    except screen.ScreenMismatch as exc:
+        # Unlike the prompt-shape case this is recoverable: a redraw, a second
+        # question, a rendering delay. Do not drop the record; report once.
+        failures = state.bump_choose_failures(sid, root)
+        log.info("daemon: screen mismatch for %s (%s)", sid, exc)
+        if failures >= 3:
+            _give_up(sid, root, deps, f"{sid}: giving up, screen never matched ({exc})")
+        return
 
-    failures = state.bump_choose_failures(sid, root)
-    actions.append(f"{sid}: choose refused ({failures})")
-    if failures >= 2:
-        state.forget(sid, root)
-        deps.notify("Gave up auto-answering this question; left it to the user")
+    for key, repeat in presses:
+        try:
+            result = deps.press(pending, key, repeat)
+        except Exception as exc:  # noqa: BLE001
+            result = {"ok": False, "error": {"code": "raised", "message": str(exc)}}
+        if result.get("ok", True) is False:
+            failures = state.bump_choose_failures(sid, root)
+            log.info("daemon: press refused for %s attempt %s (%s)",
+                     sid, key, (result.get("error") or {}).get("code"))
+            if failures >= 2:
+                state.forget(sid, root)
+                deps.notify("Gave up auto-answering this question; left it to the user")
+            return
+
+    actions.append(f"{sid}: auto-answered option {choice}")
+    state.touch(sid, root, when=now, revision=revision)
+    deps.notify(f"Auto-answered: option {choice}")
 
 
 def tick(now: float, root: Path, cfg: dict, deps: Deps) -> list[str]:
@@ -183,12 +178,12 @@ def tick(now: float, root: Path, cfg: dict, deps: Deps) -> list[str]:
 
 def build_deps(appdata: Path, cfg: dict) -> Deps:
     def do_read(pending: state.Pending) -> dict:
-        return pebrel_runtime.read(appdata, pending.window_id, pending.pane_id,
-                                   pending.session_id)
+        # The dialog gate and the screen text both come from the pane, not from
+        # conversation.read: `prompt` never carries Claude Code's question.
+        return pebrel_runtime.dialog(appdata, pending.pane_id)
 
-    def do_choose(pending: state.Pending, epoch: int, prompt_id: str, option: int) -> dict:
-        return pebrel_runtime.choose(appdata, pending.window_id, pending.pane_id,
-                                     pending.session_id, epoch, prompt_id, option)
+    def do_press(pending: state.Pending, key: str, repeat: int) -> dict:
+        return pebrel_runtime.press(appdata, pending.pane_id, key, repeat)
 
     def do_locate(session_id: str):
         return pebrel_runtime.locate(appdata, session_id)
@@ -202,7 +197,8 @@ def build_deps(appdata: Path, cfg: dict) -> Deps:
         channels.send_all(channels.Notification(title="cc-autopilot-notify",
                                                 body=message), cfg)
 
-    return Deps(read=do_read, choose=do_choose, foreground=presence.is_foreground,
+    return Deps(read=do_read, press=do_press,
+                foreground=presence.is_foreground,
                 judge_fn=do_judge, notify=do_notify, locate=do_locate)
 
 

@@ -46,7 +46,9 @@ def is_foreground(powershell: str | None = None, timeout: float = 2.0) -> bool |
     """True if the Claude Code terminal is foreground, False if not, None if unknown."""
     try:
         name = _run_ps(_SCRIPT, timeout, powershell)
-    except (OSError, subprocess.SubprocessError) as exc:
+    except (OSError, subprocess.SubprocessError, UnicodeDecodeError) as exc:
+        # UnicodeDecodeError is not an OSError: powershell.exe on a Chinese
+        # Windows writes GBK to stderr, which text=True cannot decode.
         log.debug("presence: powershell unusable (%s)", exc)
         return None
     name = name.strip().lower()

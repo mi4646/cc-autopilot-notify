@@ -8,6 +8,7 @@ appear in a log line, notification, or state file.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import socket
 from pathlib import Path
@@ -116,6 +117,34 @@ def locate(appdata: Path, session_id: str) -> tuple[int, int] | None:
         if info.get("session_id") == session_id:
             return int(agent.get("window_id", 0)), int(agent.get("pane_id", 0))
     return None
+
+
+def dialog(appdata: Path, pane_id: int) -> dict:
+    """The pane's current dialog state and visible text.
+
+    Returns {"state": <task_state>, "text": <buffer tail>, "revision": <str>}.
+
+    `conversation.read.prompt` is NOT used: a 130 s live probe showed it stays
+    null for Claude Code's AskUserQuestion even while `task_state` is
+    "attention" (0 hits across 11 samples). The gate is the task state; the
+    text is what the answer plan is checked against.
+    """
+    result = _call(appdata, "pane.read", {"pane_id": pane_id, "lines": 60})
+    text = result.get("text") or ""
+    state = result.get("task_state")
+    # `pane.read` carries no sequence number, so the revision is the tail's
+    # digest: a user navigating the dialog changes the visible text, and that
+    # is exactly the "someone is here" signal the daemon needs.
+    revision = hashlib.sha256(text.encode("utf-8", "replace")).hexdigest()[:16]
+    return {"state": state, "text": text, "revision": revision}
+
+
+def press(appdata: Path, pane_id: int, key: str, repeat: int = 1) -> dict:
+    """Send a named key to a pane. `key` is one of the runtime's key names."""
+    params = {"pane_id": pane_id, "key": key}
+    if repeat != 1:
+        params["repeat"] = repeat
+    return _call(appdata, "pane.send_key", params)
 
 
 def read(appdata: Path, window_id: int, pane_id: int, session_id: str) -> dict:

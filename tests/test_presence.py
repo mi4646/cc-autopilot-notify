@@ -30,3 +30,15 @@ def test_timeout_is_undeterminable(monkeypatch):
         raise subprocess.TimeoutExpired(cmd="ps", timeout=2)
     monkeypatch.setattr(presence, "_run_ps", slow)
     assert presence.is_foreground() is None
+
+
+def test_undecodable_output_is_undeterminable(monkeypatch):
+    """powershell.exe on a Chinese Windows writes GBK, which text=True rejects.
+
+    UnicodeDecodeError is not an OSError, so the existing handler misses it.
+    """
+    def bad(*a, **k):
+        raise UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte")
+    monkeypatch.setattr(presence, "_run_ps", bad)
+    assert presence.is_foreground() is None
+

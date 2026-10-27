@@ -37,6 +37,10 @@ except FileNotFoundError:
     data = {}
 except json.JSONDecodeError as exc:
     sys.exit(f"refusing to touch {settings_path}: invalid JSON ({exc})")
+except UnicodeDecodeError as exc:
+    # Not a JSONDecodeError: Windows editors write UTF-16, which utf-8 cannot
+    # read. Refuse rather than overwrite a file we do not understand.
+    sys.exit(f"refusing to touch {settings_path}: not UTF-8 ({exc})")
 
 data.setdefault("env", {})
 # Existing entries are stored as strings, so compare the rendered value: a
@@ -136,10 +140,14 @@ WantedBy=default.target
 UNIT
 echo "wrote $UNIT"
 
-if command -v systemctl >/dev/null; then
+# Only touch systemd when the unit really lives in the systemd user dir. A
+# throwaway CC_AUTOPILOT_UNIT (tests, dry runs) must never enable or start the
+# real service: the service name is global, so a hardcoded one would.
+SYSTEMD_USER_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
+if command -v systemctl >/dev/null && [ "$(dirname "$UNIT")" = "$SYSTEMD_USER_DIR" ]; then
   systemctl --user daemon-reload || true
-  systemctl --user enable --now cc-autopilot-notify.service || \
-    echo "warn: could not start the unit; run: systemctl --user enable --now cc-autopilot-notify" >&2
+  systemctl --user enable --now "$(basename "$UNIT")" || \
+    echo "warn: could not start the unit; run: systemctl --user enable --now $(basename "$UNIT")" >&2
 fi
 
 echo "installed. verify with: python3 -m cc_autopilot_notify.cli doctor"

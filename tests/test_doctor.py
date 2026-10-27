@@ -72,3 +72,18 @@ def test_answers_probe_passes_on_accepted(tmp_path):
 
 def test_answers_probe_skips_when_not_run(tmp_path):
     assert _probe_verdict(tmp_path, "NOT_RUN").status == "SKIP"
+
+
+def test_answers_probe_skips_on_undecodable_document(tmp_path):
+    spike = tmp_path / "spike.md"
+    spike.write_bytes(b"VERDICT: ACCEPTED\xff\xfe")
+    assert doctor._answers_probe(spike).status == "SKIP"
+
+
+def test_cc_version_survives_undecodable_output(monkeypatch):
+    import subprocess
+
+    def bad(*a, **k):
+        raise UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte")
+    monkeypatch.setattr(subprocess, "run", bad)
+    assert doctor._cc_version().status == "SKIP"

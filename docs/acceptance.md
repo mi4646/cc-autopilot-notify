@@ -136,3 +136,39 @@ The FAIL and the two SKIPs are the correct state before install.
 The three not-run items need the same thing: install into the global Claude
 Code settings, start the daemon, and ask one real question.
 
+
+## 2026-10-27 追加：路径 A 重定向（A′）
+
+实测结论（见上文与 journalctl 记录）：
+
+1. `conversation.read.prompt` 对 Claude Code 的问答面板**永远为 null**，
+   即使 `task_state=attention`（130 秒探针、11 次采样、0 次命中）。
+   路径 A 依赖的 `conversation.choose` 因此不可用。
+2. 新王牌：`agents.list` 的 `task_state == "attention"` 能标记「面板正在等」；
+   `pane read` 能拿到完整面板文本；`send-key` 能注入按键（净零探测通过）。
+3. A′ 机制 = attention 发现 + hook 结构化数据选答案 + send-key 提交。
+   spec §4.2 路径 A 自此按 A′ 理解；`conversation.choose` 实现保留但不再调用。
+
+## 2026-10-27 22:xx 端到端验证：通过
+
+隔离测试会话（Pebrel `agent-start` 起 pane 16），让 Claude 用 AskUserQuestion
+问「Alpha / Beta」，并把 Alpha 标为 `(Recommended)`。全程无人操作。
+
+```
+18:36:16 INFO daemon: 1e90fda8-…: auto-answered option 0
+```
+
+```
+● User answered Claude's questions:
+  ⎿  · 陛下要选哪一个？（我推荐 Alpha） → Alpha (Recommended)
+```
+
+判定：**路径 A′ 打通**。选中的正是 Claude 自己标注的推荐项，说明判卷第一级
+（读推荐标记）生效，且按键注入（`pane.send_key`）把答案提交到了正确的行。
+
+失败过的两次及其原因，留作记录：
+
+1. 首轮未答题：`prompt` 为 `null` 被当成「问题已结束」→ 记录一秒即被清除。
+2. 二轮未答题：daemon 因 `Deps` 缺 `press` 字段崩溃，systemd 重启 6 次后放弃。
+
+两次都不是协议问题，是本地实现缺陷。

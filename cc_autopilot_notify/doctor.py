@@ -34,7 +34,9 @@ def _cc_version() -> Check:
         out = subprocess.run(["claude", "--version"], capture_output=True,
                              text=True, timeout=5)
         text = (out.stdout or out.stderr).strip()
-    except (OSError, subprocess.SubprocessError) as exc:
+    except (OSError, subprocess.SubprocessError, UnicodeDecodeError) as exc:
+        # A non-UTF-8 reply is not an OSError; powershell.exe on a Chinese
+        # Windows writes GBK, which text=True cannot decode.
         return Check("claude version", "SKIP", f"cannot run claude: {exc}")
     return Check("claude version", "PASS" if text else "SKIP", text or "no output")
 
@@ -136,6 +138,9 @@ def _answers_probe(spike_path: Path | None = None) -> Check:
         text = spike.read_text(encoding="utf-8")
     except OSError:
         return Check("updatedInput.answers accepted", "SKIP", "no spike document")
+    except UnicodeDecodeError:
+        return Check("updatedInput.answers accepted", "SKIP",
+                     "spike document is not UTF-8")
 
     verdict = ""
     for line in text.splitlines():

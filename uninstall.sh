@@ -7,18 +7,22 @@ SETTINGS="${CC_AUTOPILOT_SETTINGS:-$HOME/.claude/settings.json}"
 CONFIG="${CC_AUTOPILOT_CONFIG:-$HOME/.config/cc-autopilot-notify/config.json}"
 UNIT="${CC_AUTOPILOT_UNIT:-$HOME/.config/systemd/user/cc-autopilot-notify.service}"
 
-if command -v systemctl >/dev/null; then
-  systemctl --user disable --now cc-autopilot-notify.service 2>/dev/null || true
-fi
-rm -f "$UNIT"
-command -v systemctl >/dev/null && systemctl --user daemon-reload 2>/dev/null || true
-
+# Rewrite settings BEFORE removing anything. A settings file we cannot read must
+# abort here: crashing after the unit is gone would leave a half-uninstall, with
+# the service removed but our hooks still registered.
 if [ -f "$SETTINGS" ]; then
   python3 - "$SETTINGS" <<'PY'
-import json, sys
+import json, os, sys, tempfile
 path = sys.argv[1]
-with open(path, encoding="utf-8") as fh:
-    data = json.load(fh)
+try:
+    with open(path, encoding="utf-8") as fh:
+        data = json.load(fh)
+except json.JSONDecodeError as exc:
+    sys.exit(f"refusing to touch {path}: invalid JSON ({exc}); nothing removed")
+except UnicodeDecodeError as exc:
+    # Not a JSONDecodeError: Windows editors write UTF-16, which utf-8 cannot
+    # read. Refuse rather than overwrite a file we do not understand.
+    sys.exit(f"refusing to touch {path}: not UTF-8 ({exc}); nothing removed")
 
 env = data.get("env") or {}
 # Put back whatever the user had before install, rather than just deleting.
@@ -58,12 +62,36 @@ if hooks:
 else:
     data.pop("hooks", None)
 
-with open(path, "w", encoding="utf-8") as fh:
-    json.dump(data, fh, ensure_ascii=False, indent=2)
-    fh.write("\n")
+# Write through a temp file: opening settings.json for writing truncates it
+# first, so a failure mid-dump would leave the file empty. mkstemp defaults to
+# 0600, so carry the original mode over before replacing.
+original_mode = os.stat(path).st_mode
+fd, tmp = tempfile.mkstemp(dir=os.path.dirname(os.path.abspath(path)),
+                           prefix=".settings-", suffix=".json")
+try:
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        json.dump(data, fh, ensure_ascii=False, indent=2)
+        fh.write("\n")
+    os.chmod(tmp, original_mode)
+    os.replace(tmp, path)
+except BaseException:
+    try:
+        os.unlink(tmp)
+    except OSError:
+        pass
+    raise
 PY
   echo "cleaned hooks from $SETTINGS"
 fi
+
+# Only now remove the unit: everything that can fail has already run.
+SYSTEMD_USER_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
+if command -v systemctl >/dev/null && [ "$(dirname "$UNIT")" = "$SYSTEMD_USER_DIR" ]; then
+  systemctl --user disable --now "$(basename "$UNIT")" 2>/dev/null || true
+fi
+rm -f "$UNIT"
+command -v systemctl >/dev/null && [ "$(dirname "$UNIT")" = "$SYSTEMD_USER_DIR" ] \
+  && systemctl --user daemon-reload 2>/dev/null || true
 
 rm -f "$CONFIG"
 rmdir "$(dirname "$CONFIG")" 2>/dev/null || true
