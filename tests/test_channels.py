@@ -26,18 +26,24 @@ def test_feishu_rejects_non_200():
         channels.feishu.check_response(500, "boom")
 
 
-def test_terminal_emits_osc9(monkeypatch, capsys):
+def test_terminal_emits_osc9(monkeypatch):
+    import io
+
     monkeypatch.setenv("TERM", "xterm-256color")
-    channels.terminal.send(_n())
-    out = capsys.readouterr().out
+    buf = io.StringIO()
+    channels.terminal.send(_n(), tty=buf)
+    out = buf.getvalue()
     assert "\x1b]9;" in out
     assert "Needs input" in out
 
 
-def test_terminal_silent_without_tty(monkeypatch, capsys):
+def test_terminal_silent_without_tty(monkeypatch):
+    import io
+
     monkeypatch.setenv("TERM", "dumb")
-    channels.terminal.send(_n())
-    assert "\x1b]9;" not in capsys.readouterr().out
+    buf = io.StringIO()
+    channels.terminal.send(_n(), tty=buf)
+    assert "\x1b]9;" not in buf.getvalue()
 
 
 def test_send_all_reports_failures_without_raising(monkeypatch):
@@ -68,3 +74,33 @@ def test_feishu_missing_code_is_a_failure():
 
 def test_feishu_string_zero_code_is_accepted():
     channels.feishu.check_response(200, json.dumps({"code": "0", "msg": "ok"}))
+
+
+class _Pipe:
+    """Stand-in for sys.stdout inside a real hook: not a tty."""
+
+    def isatty(self):
+        return False
+
+    def write(self, text):
+        raise AssertionError("must not write to the hook's stdout pipe")
+
+    def flush(self):
+        pass
+
+
+def test_terminal_writes_to_tty_when_stdout_is_a_pipe(monkeypatch):
+    """A real hook's stdout is a pipe; OSC written there is never seen."""
+    import io
+
+    captured = io.StringIO()
+    monkeypatch.setattr(channels.terminal.sys, "stdout", _Pipe())
+    monkeypatch.setattr(channels.terminal, "_open_tty",
+                        lambda: (captured, False))
+    channels.terminal.send(_n())
+    assert "\x1b]9;" in captured.getvalue()
+
+
+def test_terminal_is_silent_when_no_tty_is_available(monkeypatch):
+    monkeypatch.setattr(channels.terminal, "_open_tty", lambda: (None, False))
+    channels.terminal.send(_n())   # must not raise

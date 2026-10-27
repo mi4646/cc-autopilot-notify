@@ -159,3 +159,22 @@ def test_judge_raising_does_not_stop_other_sessions(tmp_path):
     daemon.tick(1000.0 + 150, tmp_path, _cfg(), deps)
     assert state.load_all(tmp_path) == [], "both bad records must be dropped"
     assert len(answered) == 2
+
+
+def test_unlocatable_prompt_id_logs_the_real_shape(tmp_path, caplog):
+    """The prompt shape has never been observed non-null.
+
+    When the id cannot be found, the log must carry what the server actually
+    sent, or the next debugging round starts from zero again.
+    """
+    import logging
+
+    _seed(tmp_path, appeared=1000.0)
+    deps = _deps(foreground=True)
+    deps.read = lambda p: {"revision": "r1",
+                           "prompt": {"mystery_key": 1, "options": [{"label": "A"}]},
+                           "identity": {"epoch": 1}}
+    with caplog.at_level(logging.WARNING):
+        daemon.tick(1000.0 + 150, tmp_path, _cfg(), deps)
+    joined = " ".join(r.getMessage() for r in caplog.records)
+    assert "mystery_key" in joined, f"prompt keys not logged: {joined}"

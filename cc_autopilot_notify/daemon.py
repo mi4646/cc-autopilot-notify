@@ -106,8 +106,14 @@ def _tick_one(pending: state.Pending, now: float, root: Path, cfg: dict,
     prompt_id = pebrel_runtime.prompt_id_of(reading)
     epoch = pebrel_runtime.epoch_of(reading)
     if prompt_id is None or epoch is None:
+        # Log what the server actually sent. The live shape has never been
+        # observed, so a bare "prompt_id=None" would restart the investigation
+        # from zero next time.
+        shape = sorted(prompt.keys()) if isinstance(prompt, dict) else type(prompt).__name__
+        log.warning("daemon: prompt shape for %s: %s", sid, shape)
         _give_up(sid, root, deps, f"{sid}: cannot address the prompt "
-                                   f"(prompt_id={prompt_id!r}, epoch={epoch!r})")
+                                   f"(prompt_id={prompt_id!r}, epoch={epoch!r}, "
+                                   f"prompt keys={shape})")
         return
 
     try:
