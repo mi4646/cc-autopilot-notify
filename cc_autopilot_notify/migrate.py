@@ -52,6 +52,12 @@ def _write_json(path: Path, data: dict) -> None:
         raise
 
 
+def _is_our_hook(hook: dict) -> bool:
+    """Only OUR runner: another project's run_hook.py is not ours to delete."""
+    command = str(hook.get("command", ""))
+    return "run_hook.py" in command and "cc_autopilot_notify" in command
+
+
 def _without_our_hooks(data: dict) -> int:
     removed = 0
     hooks = data.get("hooks") or {}
@@ -59,9 +65,13 @@ def _without_our_hooks(data: dict) -> int:
         kept = []
         for item in hooks[event] or []:
             inner = item.get("hooks") or []
-            if any("run_hook.py" in str(h.get("command", "")) for h in inner):
-                removed += 1
+            kept_inner = [h for h in inner if not _is_our_hook(h)]
+            removed_here = len(inner) - len(kept_inner)
+            removed += removed_here
+            if removed_here and not kept_inner:
                 continue
+            if removed_here:
+                item = {**item, "hooks": kept_inner}
             kept.append(item)
         if kept:
             hooks[event] = kept
@@ -131,6 +141,8 @@ def migrate(settings: Path, config_path: Path, unit: Path,
             f"{settings.name}.bak-{time.strftime('%Y%m%d-%H%M%S')}")
         if settings.exists():
             backup.write_bytes(settings.read_bytes())
+            # The backup still holds the webhook secret; never leave it readable.
+            os.chmod(backup, 0o600)
         _write_json(settings, data)
     stopped = _stop_unit(unit, run_systemctl)
 

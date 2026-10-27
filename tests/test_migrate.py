@@ -14,7 +14,7 @@ def _settings(tmp_path, payload):
 
 def _ours():
     return {"type": "command",
-            "command": "PYTHONPATH=/x python3 /x/run_hook.py notify"}
+            "command": "PYTHONPATH=/x python3 /x/cc_autopilot_notify/run_hook.py notify"}
 
 
 def _foreign():
@@ -32,6 +32,36 @@ def test_removes_only_our_hooks_and_keeps_foreign(tmp_path):
     data = json.loads(settings.read_text())
     assert data["hooks"]["PreToolUse"][0]["hooks"][0]["command"] == "other-tool"
     assert data["hooks"]["Stop"] == [{"matcher": "", "hooks": [_foreign()]}]
+
+
+def test_keeps_foreign_hook_in_the_same_group(tmp_path):
+    settings = _settings(tmp_path, {"hooks": {"Stop": [
+        {"matcher": "", "hooks": [_ours(), _foreign()]}]}})
+    migrate.migrate(settings, tmp_path / "cfg.json", tmp_path / "u.service",
+                    run_systemctl=False)
+    data = json.loads(settings.read_text())
+    assert data["hooks"]["Stop"] == [{"matcher": "", "hooks": [_foreign()]}]
+
+
+def test_keeps_another_projects_run_hook(tmp_path):
+    foreign = {"type": "command", "command": "python3 /other/run_hook.py notify"}
+    settings = _settings(tmp_path, {"hooks": {"Stop": [
+        {"matcher": "", "hooks": [foreign]}]}})
+    migrate.migrate(settings, tmp_path / "cfg.json", tmp_path / "u.service",
+                    run_systemctl=False)
+    data = json.loads(settings.read_text())
+    assert data["hooks"]["Stop"] == [{"matcher": "", "hooks": [foreign]}]
+
+
+def test_backup_is_private_because_it_holds_the_secret(tmp_path):
+    settings = _settings(tmp_path, {
+        "env": {"CC_AUTOPILOT_FEISHU_WEBHOOK": "https://hook.example/x"},
+        "hooks": {"Stop": [{"matcher": "", "hooks": [_ours()]}]}})
+    migrate.migrate(settings, tmp_path / "cfg" / "config.json",
+                    tmp_path / "u.service", run_systemctl=False)
+    backups = list(tmp_path.glob("settings.json.bak-*"))
+    assert len(backups) == 1
+    assert stat.S_IMODE(backups[0].stat().st_mode) == 0o600
 
 
 def test_invalid_json_aborts_without_touching_files(tmp_path):
