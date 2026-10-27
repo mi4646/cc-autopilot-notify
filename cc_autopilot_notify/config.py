@@ -1,8 +1,10 @@
 """Configuration loading, defaults, and credential lookup.
 
 The config file is JSON so hooks can parse it quickly without extra
-dependencies. Credentials never live in it: they are read from environment
-variables by name, so the file stays safe to copy around.
+dependencies. A Feishu webhook may be filled in directly, which takes
+precedence; otherwise the environment variable named by ``webhook_env`` is
+used. Because the file can now hold a credential, it must stay private: the
+default config this module writes is created with mode 0600.
 """
 
 from __future__ import annotations
@@ -27,10 +29,13 @@ DEFAULTS: dict = {
     "afk": {"set_claude_afk_timeout_ms": 300000},
     "judge": {"enabled": True, "model": None, "timeout_ms": 8000, "fallback": "first_option"},
     "channels": {
-        "feishu": {"enabled": True, "webhook_env": "CC_AUTOPILOT_FEISHU_WEBHOOK"},
+        "feishu": {"enabled": True, "webhook": None,
+                   "webhook_env": "CC_AUTOPILOT_FEISHU_WEBHOOK"},
         "terminal": {"enabled": True},
         "pebrel": {"enabled": True},
     },
+    "path_b": {"enabled": False},
+    "daemon": {"enabled": True},
     "quiet_hours": {"enabled": False, "start": "00:00", "end": "09:00"},
     "min_duration_seconds": 30,
 }
@@ -127,6 +132,10 @@ def _validate(cfg: dict) -> None:
             if not isinstance(env, str) or not env:
                 raise ConfigError(
                     f"channels.feishu.webhook_env must be an env var name, got {env!r}")
+            webhook = section.get("webhook")
+            if webhook is not None and not isinstance(webhook, str):
+                raise ConfigError(
+                    f"channels.feishu.webhook must be a URL string or null, got {webhook!r}")
 
     quiet = _require_object(cfg, "quiet_hours")
     _require_bool(quiet, "enabled", "quiet_hours.enabled")
@@ -134,6 +143,11 @@ def _validate(cfg: dict) -> None:
         value = quiet.get(name)
         if not isinstance(value, str) or not _HHMM.match(value):
             raise ConfigError(f"quiet_hours.{name} must be HH:MM, got {value!r}")
+
+    path_b = _require_object(cfg, "path_b")
+    _require_bool(path_b, "enabled", "path_b.enabled")
+    daemon = _require_object(cfg, "daemon")
+    _require_bool(daemon, "enabled", "daemon.enabled")
 
     if not _is_int(cfg.get("min_duration_seconds")) or cfg["min_duration_seconds"] < 0:
         raise ConfigError(
@@ -149,7 +163,7 @@ def load(path: Path | None = None) -> dict:
     default would hide a config mistake the user needs to see.
     """
     if path is None:
-        path = Path.home() / ".config" / "cc-autopilot-notify" / "config.json"
+        path = default_path()
     path = Path(path)
     if not path.exists():
         return copy.deepcopy(DEFAULTS)
@@ -176,11 +190,38 @@ def background_seconds(cfg: dict) -> int:
 
 
 def feishu_webhook(cfg: dict) -> str | None:
-    """Read the Feishu webhook from the environment variable the config names."""
-    env_name = _section(_section(cfg, "channels"), "feishu").get("webhook_env")
+    """Direct URL first; otherwise the env var the config names."""
+    feishu = _section(_section(cfg, "channels"), "feishu")
+    direct = feishu.get("webhook")
+    if isinstance(direct, str) and direct:
+        return direct
+    env_name = feishu.get("webhook_env")
     if not env_name:
         return None
     return os.environ.get(env_name) or None
+
+
+def path_b_enabled(cfg: dict) -> bool:
+    return _section(cfg, "path_b").get("enabled") is True
+
+
+def daemon_enabled(cfg: dict) -> bool:
+    return _section(cfg, "daemon").get("enabled", True) is True
+
+
+def default_path() -> Path:
+    override = os.environ.get("CC_AUTOPILOT_CONFIG")
+    return Path(override) if override else (
+        Path.home() / ".config" / "cc-autopilot-notify" / "config.json")
+
+
+def write_default(path: Path) -> None:
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        json.dump(copy.deepcopy(DEFAULTS), handle, ensure_ascii=False, indent=2)
+    os.chmod(path, 0o600)
 
 
 def judge_model(cfg: dict) -> str | None:

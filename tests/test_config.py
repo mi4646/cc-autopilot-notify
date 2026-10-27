@@ -122,3 +122,51 @@ def test_webhook_absent_env_is_none(monkeypatch):
 
 def test_judge_model_defaults_to_none():
     assert config.judge_model(config.DEFAULTS) is None
+
+
+def test_direct_webhook_wins_over_env(tmp_path, monkeypatch):
+    monkeypatch.setenv("CC_AUTOPILOT_FEISHU_WEBHOOK", "https://env.example/x")
+    cfg = _load(tmp_path, {"channels": {"feishu": {"webhook": "https://direct.example/y"}}})
+    assert config.feishu_webhook(cfg) == "https://direct.example/y"
+
+
+def test_env_fallback_when_webhook_absent(tmp_path, monkeypatch):
+    monkeypatch.setenv("CC_AUTOPILOT_FEISHU_WEBHOOK", "https://env.example/x")
+    cfg = _load(tmp_path, {"thresholds": {"foreground_seconds": 150,
+                                         "background_seconds": 90}})
+    assert config.feishu_webhook(cfg) == "https://env.example/x"
+
+
+def test_empty_direct_webhook_falls_back_to_env(tmp_path, monkeypatch):
+    monkeypatch.setenv("CC_AUTOPILOT_FEISHU_WEBHOOK", "https://env.example/x")
+    cfg = _load(tmp_path, {"channels": {"feishu": {"webhook": ""}}})
+    assert config.feishu_webhook(cfg) == "https://env.example/x"
+
+
+def test_bad_webhook_type_raises(tmp_path):
+    _assert_config_error(tmp_path, {"channels": {"feishu": {"webhook": 5}}})
+
+
+def test_path_b_and_daemon_flags_validate(tmp_path):
+    assert config.path_b_enabled(_load(tmp_path, {})) is False
+    assert config.daemon_enabled(_load(tmp_path, {})) is True
+    cfg = _load(tmp_path, {"path_b": {"enabled": True}, "daemon": {"enabled": False}})
+    assert config.path_b_enabled(cfg) is True
+    assert config.daemon_enabled(cfg) is False
+    _assert_config_error(tmp_path, {"path_b": {"enabled": "yes"}})
+    _assert_config_error(tmp_path, {"daemon": {"enabled": 1}})
+
+
+def test_config_path_env_override(tmp_path, monkeypatch):
+    target = tmp_path / "custom.json"
+    target.write_text(json.dumps({"thresholds": {"foreground_seconds": 111,
+                                                 "background_seconds": 22}}))
+    monkeypatch.setenv("CC_AUTOPILOT_CONFIG", str(target))
+    assert config.foreground_seconds(config.load()) == 111
+
+
+def test_write_default_is_private(tmp_path):
+    target = tmp_path / "cfg" / "config.json"
+    config.write_default(target)
+    assert json.loads(target.read_text())["daemon"]["enabled"] is True
+    assert (target.stat().st_mode & 0o777) == 0o600
