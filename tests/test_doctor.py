@@ -93,7 +93,8 @@ def test_cc_version_survives_undecodable_output(monkeypatch):
 def test_doctor_fails_when_legacy_hooks_remain(tmp_path, monkeypatch):
     settings = tmp_path / "settings.json"
     settings.write_text(json.dumps({"hooks": {"Stop": [
-        {"hooks": [{"command": "python3 /x/run_hook.py notify"}]}]}}))
+        {"hooks": [{"command":
+                    "PYTHONPATH=/x python3 /x/cc_autopilot_notify/run_hook.py notify"}]}]}}))
     monkeypatch.setenv("CC_AUTOPILOT_SETTINGS", str(settings))
     checks = doctor.run_all(tmp_path, {"channels": {}}, probe=lambda: {})
     assert {c.name: c for c in checks}["legacy install"].status == "FAIL"
@@ -102,6 +103,15 @@ def test_doctor_fails_when_legacy_hooks_remain(tmp_path, monkeypatch):
 def test_doctor_passes_when_settings_have_no_legacy_hooks(tmp_path, monkeypatch):
     settings = tmp_path / "settings.json"
     settings.write_text(json.dumps({"hooks": {}}))
+    monkeypatch.setenv("CC_AUTOPILOT_SETTINGS", str(settings))
+    checks = doctor.run_all(tmp_path, {"channels": {}}, probe=lambda: {})
+    assert {c.name: c for c in checks}["legacy install"].status == "PASS"
+
+
+def test_doctor_passes_for_another_projects_run_hook(tmp_path, monkeypatch):
+    settings = tmp_path / "settings.json"
+    settings.write_text(json.dumps({"hooks": {"Stop": [
+        {"hooks": [{"command": "python3 /other/run_hook.py notify"}]}]}}))
     monkeypatch.setenv("CC_AUTOPILOT_SETTINGS", str(settings))
     checks = doctor.run_all(tmp_path, {"channels": {}}, probe=lambda: {})
     assert {c.name: c for c in checks}["legacy install"].status == "PASS"

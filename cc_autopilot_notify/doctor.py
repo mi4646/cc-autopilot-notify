@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Callable
 
 from . import pebrel_runtime, state
+from .migrate import _is_our_hook
 
 log = logging.getLogger(__name__)
 
@@ -112,7 +113,9 @@ def _legacy_install() -> Check:
     for items in (data.get("hooks") or {}).values():
         for item in items or []:
             for hook in item.get("hooks") or []:
-                if "run_hook.py" in str(hook.get("command", "")):
+                # Same predicate as migration: a foreign run_hook.py is neither
+                # removed by /cc-autopilot:migrate nor a reason to demand it.
+                if _is_our_hook(hook):
                     return Check("legacy install", "FAIL",
                                  "legacy hooks in settings.json; run /cc-autopilot:migrate")
     return Check("legacy install", "PASS", "no legacy entries in settings.json")
