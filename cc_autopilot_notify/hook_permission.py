@@ -85,6 +85,15 @@ def handle(event: dict, root, cfg: dict) -> int:
 
 
 def main() -> int:
+    from . import config
+
+    try:
+        cfg = config.load()
+    except Exception:  # noqa: BLE001 - a hook must never wedge Claude Code
+        log.exception("permission hook: cannot load config; leaving the dialog alone")
+        return 0
+    if not config.path_b_enabled(cfg):
+        return 0
     return hook_common.run_hook(handle)
 
 
