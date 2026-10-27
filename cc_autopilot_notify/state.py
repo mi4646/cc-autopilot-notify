@@ -149,11 +149,12 @@ def read_heartbeat(root: Path) -> dict | None:
     path = Path(root) / f"{_HEARTBEAT}.json"
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+        if not isinstance(data, dict) or not isinstance(data.get("at"), (int, float)):
+            return None
+        at = float(data["at"])
+    except (OSError, ValueError, OverflowError, TypeError):
         return None
-    if not isinstance(data, dict) or not isinstance(data.get("at"), (int, float)):
-        return None
-    return {"at": float(data["at"]), "pid": data.get("pid"),
+    return {"at": at, "pid": data.get("pid"),
             "plugin_root": data.get("plugin_root"),
             "version": data.get("version")}
 
