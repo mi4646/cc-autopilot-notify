@@ -162,7 +162,7 @@
 规则：
 
 - `config.feishu_webhook()`：`channels.feishu.webhook` 非空字符串 → 返回它；否则读取 `webhook_env` 指定的环境变量。
-- `_validate` 同步新增：`webhook` 为 `null` 或非空字符串；`path_b.enabled`、`daemon.enabled` 为 bool。
+- `_validate` 同步新增：`webhook` 为 `null`、空字符串或非空字符串（空字符串表示「未配置」，回退到 `webhook_env`）；`path_b.enabled`、`daemon.enabled` 为 bool。
 - `hook_permission` 开头读取 `path_b.enabled`，false 即 `return 0`；该判断发生在读 stdin 之前，保证不阻塞。
 - 首次 SessionStart 若 `~/.config/cc-autopilot-notify/config.json` 不存在：写默认配置并 `chmod 0600`。已存在则不动。
 - `config.py` 模块 docstring 中「Credentials never live in it」一句需要改写为「直填优先、env 回退」，并在 README 说明文件权限要求。
@@ -186,14 +186,14 @@
 步骤：
 
 1. 读取 `~/.claude/settings.json`；JSON 无效或非 UTF-8 → 整体中止，不做任何修改（沿用 `uninstall.sh` 的安全前置）。
-2. 删除命令中含 `run_hook.py` 的 hook 条目；删除 `_ccAutopilotPrevious` 中由本工具写入的键；其他条目一字不动。
+2. 删除**同时**含 `run_hook.py` 与 `cc_autopilot_notify` 的 hook 条目（只有内层 hooks 匹配，同组其他 hook 保留；某组内层清空时才删除整组）；删除 `_ccAutopilotPrevious` 中由本工具写入的键；其他条目一字不动。
 3. 写回前备份为 `settings.json.bak-YYYYMMDD-HHMMSS`。
 4. 若 `~/.config/systemd/user/cc-autopilot-notify.service` 存在且内容含 `cc_autopilot_notify`：`systemctl --user disable --now` 后删除 unit；否则只提示不碰。
 5. 若旧 `env.CC_AUTOPILOT_FEISHU_WEBHOOK` 存在且配置中尚无非空 `webhook`：把值写入 `config.json` 的 `channels.feishu.webhook`，成功后从 `settings.json` 的 `env` 中移除该键；写入失败则保留 env 并报错。
 6. 若旧 `env.CLAUDE_AFK_TIMEOUT_MS` 存在：保留（Tier C 需要），并在输出中提示用户确认。
 7. 幂等：第二次运行检测到无旧条目时输出「nothing to migrate」并返回 0。
 
-`doctor` 新增检查 `legacy install`：settings.json 中仍存在含 `run_hook.py` 的条目时 FAIL，提示运行 `/cc-autopilot:migrate`。
+`doctor` 新增检查 `legacy install`：settings.json 中仍存在同时含 `run_hook.py` 与 `cc_autopilot_notify` 的条目时 FAIL，提示运行 `/cc-autopilot:migrate`；没有则为 PASS。
 
 ---
 

@@ -113,7 +113,7 @@ PASS  pebrel conversation capabilities: conversation.read+choose
 PASS  powershell foreground: foreground=False
 FAIL  daemon heartbeat: no heartbeat file; daemon not running
 SKIP  feishu webhook: not configured
-SKIP  hooks installed: not installed yet
+PASS  legacy install: no legacy entries in settings.json
 SKIP  updatedInput.answers accepted: unverified on this CC version
 ```
 
@@ -180,4 +180,6 @@ Code settings, start the daemon, and ask one real question.
   `settings.json.bak-*`。
 - `enabledPlugins."cc-notify-hooks@cc-notify-hooks"` 置 `false`。
 - 实测 `test-channel feishu` → `feishu: sent`（HTTP 200 且业务 code=0）。
-- doctor：`feishu webhook: configured`、daemon 心跳 PASS、hook 安装 PASS。
+- doctor：`feishu webhook: configured`、daemon 心跳 PASS。直装写入 settings.json
+  的 hooks 在插件版的 `legacy install` 检查中会显示为 legacy，需运行
+  `/cc-autopilot:migrate`。

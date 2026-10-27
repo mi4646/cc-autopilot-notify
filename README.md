@@ -23,7 +23,46 @@ and win. Path B blocks the dialog, which is why it is off unless you ask for it.
 Idle thresholds: **150 s** while the terminal is focused, **90 s** otherwise.
 Touching the dialog resets the timer.
 
-## Install
+## Install (plugin)
+
+```bash
+claude plugin marketplace add mi4646/cc-autopilot-notify
+claude plugin install cc-autopilot-notify@cc-autopilot-notify
+```
+
+The daemon starts automatically on the next session. Set the Feishu webhook in
+`~/.config/cc-autopilot-notify/config.json` (created on first SessionStart with
+mode `0600`):
+
+```json
+{"channels": {"feishu": {"webhook": "https://open.feishu.cn/open-apis/bot/v2/hook/..."}}}
+```
+
+`CC_AUTOPILOT_FEISHU_WEBHOOK` still works as a fallback. Leaving `webhook` as
+`null` or an empty string also falls back to it.
+
+### Upgrading from the legacy direct install
+
+```bash
+/cc-autopilot:migrate
+```
+
+It removes only our `run_hook.py` entries from `settings.json` (entries that
+also mention `cc_autopilot_notify`), moves the webhook into the config, and
+stops the old systemd unit. Unrelated entries are kept; a backup is written
+first.
+
+### Tier C
+
+Plugins cannot write `settings.json`. To keep the AFK fallback, set it yourself:
+
+```json
+{"env": {"CLAUDE_AFK_TIMEOUT_MS": 300000}}
+```
+
+The legacy section below still works for a non-plugin install.
+
+## Install (legacy direct)
 
 ```bash
 ./install.sh                 # previews nothing, writes settings/hook/config/unit
@@ -45,9 +84,8 @@ CC_AUTOPILOT_ENABLE_PATH_B=1 ./install.sh
 ## Verify
 
 ```bash
-python3 -m cc_autopilot_notify.cli doctor
-python3 -m cc_autopilot_notify.cli test-channel terminal
-python3 -m cc_autopilot_notify.cli test-channel feishu
+bash scripts/cc-autopilot-notify doctor
+bash scripts/cc-autopilot-notify test-channel feishu
 ```
 
 `doctor` must show `pebrel runtime`, `pebrel protocol version`,
@@ -55,7 +93,7 @@ python3 -m cc_autopilot_notify.cli test-channel feishu
 `daemon heartbeat` as PASS. A FAIL there means auto-answer is not working, and
 the reason is on the same line.
 
-## Uninstall
+## Uninstall (legacy direct)
 
 ```bash
 ./uninstall.sh
