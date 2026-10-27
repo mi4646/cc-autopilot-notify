@@ -172,3 +172,12 @@ Code settings, start the daemon, and ask one real question.
 2. 二轮未答题：daemon 因 `Deps` 缺 `press` 字段崩溃，systemd 重启 6 次后放弃。
 
 两次都不是协议问题，是本地实现缺陷。
+
+## 2026-10-27 收尾：飞书接入与旧插件停用
+
+- `env.CC_AUTOPILOT_FEISHU_WEBHOOK` 写入 `~/.claude/settings.json`
+  （值取自旧 cc-notify-hooks 配置，全程未打印）。修改前已备份
+  `settings.json.bak-*`。
+- `enabledPlugins."cc-notify-hooks@cc-notify-hooks"` 置 `false`。
+- 实测 `test-channel feishu` → `feishu: sent`（HTTP 200 且业务 code=0）。
+- doctor：`feishu webhook: configured`、daemon 心跳 PASS、hook 安装 PASS。
