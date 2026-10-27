@@ -8,6 +8,7 @@ gives a human the same threshold to answer first, after which we answer.
 from __future__ import annotations
 
 import logging
+import os
 import sys
 import time
 
@@ -72,7 +73,10 @@ def handle(event: dict, root, cfg: dict) -> int:
 
     from . import config
 
-    wait = config.background_seconds(cfg)
+    # Claude Code kills a hook at its configured timeout, so the wait must end
+    # before that or the hook is killed mid-block having answered nothing.
+    hook_timeout = float(os.environ.get("CC_AUTOPILOT_HOOK_TIMEOUT", "180"))
+    wait = min(config.background_seconds(cfg), max(hook_timeout - 10.0, 0.0))
     payload = answer(event, wait_seconds=wait,
                      judge_fn=lambda q: judge.pick(q, model=config.judge_model(cfg)).index)
     if payload is not None:

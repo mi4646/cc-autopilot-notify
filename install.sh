@@ -39,27 +39,33 @@ except json.JSONDecodeError as exc:
     sys.exit(f"refusing to touch {settings_path}: invalid JSON ({exc})")
 
 data.setdefault("env", {})
+# Existing entries are stored as strings, so compare the rendered value: a
+# same-value string must not abort a fresh install.
 existing = data["env"].get("CLAUDE_AFK_TIMEOUT_MS")
-if existing is not None and existing != afk_ms:
+if existing is not None and str(existing) != str(afk_ms):
     if os.environ.get("CC_AUTOPILOT_FORCE") != "1":
         sys.exit(
-            f"env.CLAUDE_AFK_TIMEOUT_MS is {existing}, we want {afk_ms}.\n"
-            "Re-run with CC_AUTOPILOT_FORCE=1 to change it."
+            f"env.CLAUDE_AFK_TIMEOUT_MS is {existing!r}, this install wants "
+            f"{afk_ms}.\nRe-run with CC_AUTOPILOT_FORCE=1 to change it."
         )
+    # Remember the user's value so uninstall can put it back.
+    data.setdefault("_ccAutopilotPrevious", {})["CLAUDE_AFK_TIMEOUT_MS"] = existing
 data["env"]["CLAUDE_AFK_TIMEOUT_MS"] = afk_ms
 
 runner = os.path.join(repo, "cc_autopilot_notify", "run_hook.py")
 hooks = data.setdefault("hooks", {})
 
-def entry(module, matcher):
+def entry(module, matcher, timeout=10):
+    # PYTHONPATH is set explicitly: a hook is launched by path from an arbitrary
+    # cwd, so the package is not importable without it.
     return {"matcher": matcher,
             "hooks": [{"type": "command",
-                       "command": f"python3 {runner} {module}",
-                       "timeout": 10}]}
+                       "command": f"PYTHONPATH={repo} python3 {runner} {module}",
+                       "timeout": timeout}]}
 
-def add(event, module, matcher):
+def add(event, module, matcher, timeout=10):
     bucket = hooks.setdefault(event, [])
-    ours = entry(module, matcher)
+    ours = entry(module, matcher, timeout)
     for item in bucket:
         for h in item.get("hooks", []):
             if "run_hook.py" in str(h.get("command", "")) and module in str(h.get("command", "")):
@@ -70,11 +76,14 @@ add("PreToolUse", "pre_tool", "AskUserQuestion")
 add("PostToolUse", "notify", "AskUserQuestion")
 add("Notification", "notify", "")
 add("Stop", "notify", "")
+add("StopFailure", "notify", "")
 
 # Path B blocks the dialog until it returns (spec §4.2), so it stays off
-# unless the user explicitly opts in.
+# unless the user explicitly opts in. Its timeout must exceed its own wait,
+# or Claude Code kills it before it can answer.
 if os.environ.get("CC_AUTOPILOT_ENABLE_PATH_B") == "1":
-    add("PermissionRequest", "permission", "AskUserQuestion")
+    # wait is background_seconds (90s) + margin; the hook must outlive it
+    add("PermissionRequest", "permission", "AskUserQuestion", timeout=180)
 
 print(json.dumps(data, ensure_ascii=False, indent=2))
 PY
@@ -99,12 +108,12 @@ if [ -f "$CONFIG" ]; then
   cp "$CONFIG" "$CONFIG.bak-$STAMP"
   echo "backed up config to $CONFIG.bak-$STAMP"
 fi
-python3 -c "
+PYTHONPATH="$REPO" python3 -c "
 import json, sys
 from cc_autopilot_notify import config
 json.dump(config.DEFAULTS, open(sys.argv[1], 'w', encoding='utf-8'),
           ensure_ascii=False, indent=2)
-" "$CONFIG"
+" "$CONFIG" || { echo "error: could not write $CONFIG" >&2; exit 1; }
 echo "wrote $CONFIG"
 
 # systemd user unit: Pebrel is a Windows process, so it cannot host this.

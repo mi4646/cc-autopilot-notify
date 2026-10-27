@@ -27,14 +27,26 @@ HEARTBEAT_SECONDS = 10.0
 @dataclasses.dataclass
 class Deps:
     read: Callable[[state.Pending], dict]
-    choose: Callable[[state.Pending, str, int], dict]
+    choose: Callable[[state.Pending, int, str, int], dict]  # (pending, epoch, prompt_id, option)
     foreground: Callable[[], bool | None]
     judge_fn: Callable[[dict], int]
     notify: Callable[[str], None]
+    locate: Callable[[str], "tuple[int, int] | None"] = lambda sid: None
 
 
 def should_fire(pending: state.Pending, now: float, threshold: float) -> bool:
     return (now - pending.last_activity) >= threshold
+
+
+def _give_up(sid: str, root: Path, deps: "Deps", message: str) -> None:
+    """Stop trying, tell the user once, then drop the record.
+
+    Without the drop this would re-notify every tick forever, and each notify
+    runs the whole channel fan-out inside the single-threaded loop.
+    """
+    state.forget(sid, root)
+    log.warning("daemon: %s", message)
+    deps.notify(message)
 
 
 def _threshold(cfg: dict, foreground: bool | None) -> int:
@@ -48,6 +60,21 @@ def _threshold(cfg: dict, foreground: bool | None) -> int:
 def _tick_one(pending: state.Pending, now: float, root: Path, cfg: dict,
               deps: Deps, actions: list[str]) -> None:
     sid = pending.session_id
+
+    # Claude Code's hook payload has no pane identity, so resolve it from Pebrel
+    # before reading. Without this the runtime refuses pane 0 outright.
+    if not pending.pane_id or not pending.window_id:
+        try:
+            located = deps.locate(sid)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("daemon: cannot locate a pane for %s (%s)", sid, exc)
+            return
+        if located is None:
+            log.info("daemon: %s is not running in any Pebrel pane yet", sid)
+            return
+        pending.window_id, pending.pane_id = located
+        state.record(pending, root)
+
     try:
         reading = deps.read(pending)
     except Exception as exc:  # noqa: BLE001 - one bad pane must not stop the loop
@@ -73,21 +100,37 @@ def _tick_one(pending: state.Pending, now: float, root: Path, cfg: dict,
     if not should_fire(pending, now, threshold):
         return
 
+    # The two fields `conversation.choose` requires and `conversation.read` does
+    # not always supply in the place we look. Missing either is a hard stop for
+    # this tick: sending a guess is what produces a wrong answer.
+    prompt_id = pebrel_runtime.prompt_id_of(reading)
+    epoch = pebrel_runtime.epoch_of(reading)
+    if prompt_id is None or epoch is None:
+        _give_up(sid, root, deps, f"{sid}: cannot address the prompt "
+                                   f"(prompt_id={prompt_id!r}, epoch={epoch!r})")
+        return
+
     try:
         options = pebrel_runtime.question_options(prompt)
     except pebrel_runtime.RuntimeError as exc:
-        log.warning("daemon: cannot parse prompt for %s (%s)", sid, exc)
-        deps.notify(f"Could not auto-answer: unrecognised question shape ({exc})")
+        _give_up(sid, root, deps, f"{sid}: unrecognised question shape ({exc})")
+        return
+    if not options:
+        _give_up(sid, root, deps, f"{sid}: prompt has no options")
         return
 
     question = (pending.questions or [{}])[0]
-    question = {**question, "options": options or question.get("options", [])}
-    choice = deps.judge_fn(question)
-    prompt_id = reading.get("prompt_id") or ""
+    question = {**question, "options": options}
+    try:
+        choice = deps.judge_fn(question)
+    except Exception as exc:  # noqa: BLE001 - one bad question must not stop the loop
+        log.warning("daemon: judge failed for %s (%s)", sid, exc)
+        _give_up(sid, root, deps, f"{sid}: judge failed ({exc})")
+        return
 
     for attempt in (1, 2):
         try:
-            result = deps.choose(pending, prompt_id, choice)
+            result = deps.choose(pending, epoch, prompt_id, choice)
         except Exception as exc:  # noqa: BLE001 - refusal and transport alike
             result = {"ok": False, "error": {"code": "raised", "message": str(exc)}}
         if result.get("ok", True) is not False:
@@ -107,7 +150,13 @@ def _tick_one(pending: state.Pending, now: float, root: Path, cfg: dict,
         if again.get("prompt") is None:
             state.forget(sid, root)
             return
-        prompt_id = again.get("prompt_id") or prompt_id
+        # Never reuse an index across a changed prompt: it referred to the old
+        # option list. Drop the record and let the next tick judge afresh.
+        if again.get("revision") != revision:
+            actions.append(f"{sid}: prompt changed while answering; re-judging next tick")
+            state.touch(sid, root, when=now, revision=again.get("revision"))
+            return
+        prompt_id = pebrel_runtime.prompt_id_of(again) or prompt_id
 
     failures = state.bump_choose_failures(sid, root)
     actions.append(f"{sid}: choose refused ({failures})")
@@ -131,22 +180,24 @@ def build_deps(appdata: Path, cfg: dict) -> Deps:
         return pebrel_runtime.read(appdata, pending.window_id, pending.pane_id,
                                    pending.session_id)
 
-    def do_choose(pending: state.Pending, prompt_id: str, option: int) -> dict:
+    def do_choose(pending: state.Pending, epoch: int, prompt_id: str, option: int) -> dict:
         return pebrel_runtime.choose(appdata, pending.window_id, pending.pane_id,
-                                     pending.session_id, prompt_id, option)
+                                     pending.session_id, epoch, prompt_id, option)
+
+    def do_locate(session_id: str):
+        return pebrel_runtime.locate(appdata, session_id)
 
     def do_judge(question: dict) -> int:
         return judge.pick(question, model=config.judge_model(cfg)).index
 
     from . import channels
-    from .config import _merge  # local import keeps module import order simple
 
     def do_notify(message: str) -> None:
         channels.send_all(channels.Notification(title="cc-autopilot-notify",
                                                 body=message), cfg)
 
     return Deps(read=do_read, choose=do_choose, foreground=presence.is_foreground,
-                judge_fn=do_judge, notify=do_notify)
+                judge_fn=do_judge, notify=do_notify, locate=do_locate)
 
 
 def run(root: Path, cfg: dict, appdata: Path | None = None) -> None:

@@ -7,7 +7,15 @@ dispatch in one place.
 
 from __future__ import annotations
 
+import os
 import sys
+
+# A hook is launched by path, so sys.path[0] is this package directory and the
+# package itself is not importable. Put the repo root on the path before any
+# package import happens.
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
 
 _MODULES = {
     "pre_tool": "hook_pre_tool",

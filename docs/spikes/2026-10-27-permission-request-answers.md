@@ -66,6 +66,8 @@ cp ~/.claude/settings.json.bak-probe ~/.claude/settings.json
 
 ## Result
 
+VERDICT: NOT_RUN
+
 **Not run.** Requires editing the global `~/.claude/settings.json` and starting
 a fresh Claude Code session, which cannot be done from inside the session being
 edited.

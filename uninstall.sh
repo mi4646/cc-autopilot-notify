@@ -21,11 +21,23 @@ with open(path, encoding="utf-8") as fh:
     data = json.load(fh)
 
 env = data.get("env") or {}
-env.pop("CLAUDE_AFK_TIMEOUT_MS", None)
+# Put back whatever the user had before install, rather than just deleting.
+previous = (data.get("_ccAutopilotPrevious") or {}).get("CLAUDE_AFK_TIMEOUT_MS")
+if previous is not None:
+    env["CLAUDE_AFK_TIMEOUT_MS"] = previous
+else:
+    env.pop("CLAUDE_AFK_TIMEOUT_MS", None)
 if env:
     data["env"] = env
 else:
     data.pop("env", None)
+
+prev_map = data.get("_ccAutopilotPrevious") or {}
+prev_map.pop("CLAUDE_AFK_TIMEOUT_MS", None)
+if prev_map:
+    data["_ccAutopilotPrevious"] = prev_map
+else:
+    data.pop("_ccAutopilotPrevious", None)
 
 hooks = data.get("hooks") or {}
 for event in list(hooks):

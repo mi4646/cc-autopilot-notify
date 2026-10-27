@@ -97,6 +97,27 @@ def describe(appdata: Path) -> dict:
     return _call(appdata, "runtime.describe", {})
 
 
+def agents(appdata: Path) -> list[dict]:
+    """Every pane running an agent, with its session_id, window_id and pane_id."""
+    result = _call(appdata, "agents.list", {})
+    found = result.get("agents")
+    return found if isinstance(found, list) else []
+
+
+def locate(appdata: Path, session_id: str) -> tuple[int, int] | None:
+    """Resolve a Claude session to (window_id, pane_id).
+
+    Claude Code's hook payload carries no pane identity, so the mapping must come
+    from Pebrel itself. Guessing pane 0 is refused by the runtime with
+    `invalid_params`.
+    """
+    for agent in agents(appdata):
+        info = agent.get("agent") or {}
+        if info.get("session_id") == session_id:
+            return int(agent.get("window_id", 0)), int(agent.get("pane_id", 0))
+    return None
+
+
 def read(appdata: Path, window_id: int, pane_id: int, session_id: str) -> dict:
     return _call(appdata, "conversation.read", {
         "window_id": window_id,
@@ -106,19 +127,51 @@ def read(appdata: Path, window_id: int, pane_id: int, session_id: str) -> dict:
 
 
 def choose(appdata: Path, window_id: int, pane_id: int, session_id: str,
-           prompt_id: str, option: int) -> dict:
+           epoch: int, prompt_id: str, option: int) -> dict:
     """Choose an option. Raises RuntimeError when Pebrel refuses.
 
-    A refusal is expected when the user answered first, so callers treat
-    the raise as an outcome, not a crash.
+    `epoch` and `prompt_id` are both required by the live server:
+    `invalid conversation operation fields` and `the current prompt_id is
+    required` respectively. A refusal is expected when the user answered first,
+    so callers treat the raise as an outcome, not a crash.
     """
     return _call(appdata, "conversation.choose", {
         "window_id": window_id,
         "pane_id": pane_id,
-        "identity": {"kind": "claude", "session_id": session_id},
+        "identity": {"kind": "claude", "session_id": session_id, "epoch": epoch},
         "prompt_id": prompt_id,
         "option": option,
     })
+
+
+# The live shape of an open question has never been observed (`prompt` is always
+# null on a live pane), so the id is looked for in every plausible place rather
+# than pinned to one unverified key.
+_PROMPT_ID_KEYS = ("prompt_id", "promptId", "id")
+
+
+def prompt_id_of(reading: dict) -> str | None:
+    """Extract the id `conversation.choose` requires, or None if absent."""
+    prompt = reading.get("prompt")
+    if isinstance(prompt, dict):
+        for key in _PROMPT_ID_KEYS:
+            value = prompt.get(key)
+            if isinstance(value, str) and value:
+                return value
+    for key in _PROMPT_ID_KEYS:
+        value = reading.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
+def epoch_of(reading: dict) -> int | None:
+    identity = reading.get("identity")
+    if isinstance(identity, dict):
+        epoch = identity.get("epoch")
+        if isinstance(epoch, int) and not isinstance(epoch, bool):
+            return epoch
+    return None
 
 
 def supports_conversation(desc: dict) -> bool:

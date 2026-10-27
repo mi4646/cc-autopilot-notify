@@ -26,8 +26,18 @@ def check_response(status: int, body: str) -> None:
         parsed = json.loads(body)
     except ValueError:
         raise FeishuError(f"non-JSON reply: {body[:200]}") from None
-    code = parsed.get("code", parsed.get("StatusCode", 0))
-    if code not in (0, None):
+    if not isinstance(parsed, dict):
+        raise FeishuError(f"non-object reply: {body[:200]}")
+    # A proxy or gateway error body has no `code` at all. Defaulting a missing
+    # key to 0 would report a message delivered that nobody received.
+    if "code" not in parsed and "StatusCode" not in parsed:
+        raise FeishuError(f"reply has no status code: {body[:200]}")
+    raw = parsed.get("code", parsed.get("StatusCode"))
+    try:
+        code = int(raw)
+    except (TypeError, ValueError):
+        raise FeishuError(f"unparseable code={raw!r}") from None
+    if code != 0:
         raise FeishuError(f"code={code} msg={parsed.get('msg') or parsed.get('StatusMessage')}")
 
 

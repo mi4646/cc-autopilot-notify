@@ -58,3 +58,13 @@ def test_disabled_channel_is_not_called(monkeypatch):
                         "pebrel": {"enabled": False}}}
     assert channels.send_all(_n(), cfg) == []
     assert called == []
+
+
+def test_feishu_missing_code_is_a_failure():
+    """A gateway error body has no code; treating it as success hides the loss."""
+    with pytest.raises(channels.feishu.FeishuError):
+        channels.feishu.check_response(200, json.dumps({"msg": "no code here", "data": {}}))
+
+
+def test_feishu_string_zero_code_is_accepted():
+    channels.feishu.check_response(200, json.dumps({"code": "0", "msg": "ok"}))

@@ -95,46 +95,60 @@ def _feishu(cfg: dict) -> Check:
 
 
 def _settings_clean() -> Check:
+    """Report whether OUR hooks are installed.
+
+    Presence is the healthy state after install, so this is a positive check:
+    a plain substring search would also match an unrelated project path that
+    happens to contain the name.
+    """
     import json
     import os
 
     path = Path(os.environ.get("CC_AUTOPILOT_SETTINGS")
                 or Path.home() / ".claude" / "settings.json")
     try:
-        text = path.read_text(encoding="utf-8")
+        data = json.loads(path.read_text(encoding="utf-8"))
     except OSError as exc:
-        return Check("settings residue", "SKIP", f"cannot read {path}: {exc}")
-    try:
-        data = json.loads(text)
+        return Check("hooks installed", "SKIP", f"cannot read {path}: {exc}")
     except ValueError:
-        return Check("settings residue", "FAIL", f"{path} is not valid JSON")
-    present = "cc_autopilot_notify" in text
-    return Check("settings residue", "PASS" if not present else "FAIL",
-                 "no cc_autopilot_notify entries" if not present
-                 else "settings.json still references cc_autopilot_notify")
+        return Check("hooks installed", "FAIL", f"{path} is not valid JSON")
+
+    for items in (data.get("hooks") or {}).values():
+        for item in items or []:
+            for hook in item.get("hooks") or []:
+                if "run_hook.py" in str(hook.get("command", "")):
+                    return Check("hooks installed", "PASS",
+                                 "our hook is registered in settings.json")
+    return Check("hooks installed", "SKIP", "not installed yet")
 
 
-def _answers_probe() -> Check:
-    """Path B's viability. Remains SKIP until someone runs the recorded probe.
+def _answers_probe(spike_path: Path | None = None) -> Check:
+    """Path B's viability. SKIP until someone runs the recorded probe.
 
     A hook that answers questions cannot be tested from inside the session it
-    would answer, so this check reports the state of the spike document rather
-    than pretending to verify the behavior.
+    would answer, so this reads the spike document's explicit verdict line. It
+    must never report PASS on a "discarded" outcome: this check exists to
+    re-detect exactly that failure after a Claude Code upgrade.
     """
-    from pathlib import Path as _Path
-
-    spike = (_Path(__file__).resolve().parent.parent / "docs" / "spikes"
-             / "2026-10-27-permission-request-answers.md")
+    spike = spike_path or (Path(__file__).resolve().parent.parent / "docs" / "spikes"
+                           / "2026-10-27-permission-request-answers.md")
     try:
         text = spike.read_text(encoding="utf-8")
     except OSError:
         return Check("updatedInput.answers accepted", "SKIP", "no spike document")
-    if "NOT YET RUN" in text:
-        return Check("updatedInput.answers accepted", "SKIP",
-                     "unverified on this CC version; see the spike document")
-    if "Result: **A" in text or "accepted" in text.split("## Result", 1)[-1][:200]:
-        return Check("updatedInput.answers accepted", "PASS", "confirmed by probe")
-    return Check("updatedInput.answers accepted", "SKIP", "probe outcome unclear")
+
+    verdict = ""
+    for line in text.splitlines():
+        if line.startswith("VERDICT:"):
+            verdict = line.split(":", 1)[1].strip().upper()
+            break
+    if verdict == "ACCEPTED":
+        return Check("updatedInput.answers accepted", "PASS", "probe confirmed acceptance")
+    if verdict == "DISCARDED":
+        return Check("updatedInput.answers accepted", "FAIL",
+                     "probe showed CC discards it; path B is unusable here")
+    return Check("updatedInput.answers accepted", "SKIP",
+                 "unverified on this CC version; see the spike document")
 
 
 def run_all(root: Path, cfg: dict, probe: Callable[[], dict] | None = None,

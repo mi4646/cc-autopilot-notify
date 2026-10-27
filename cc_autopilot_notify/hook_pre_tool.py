@@ -11,6 +11,7 @@ The daemon does the waiting.
 from __future__ import annotations
 
 import logging
+import os
 import sys
 import time
 from pathlib import Path
@@ -37,10 +38,18 @@ def handle(event: dict, root: Path, cfg: dict) -> int:
         return 0
 
     now = time.time()
+    # Claude Code's hook payload carries no pane identity, and the runtime
+    # refuses pane 0 with `invalid_params`. Prefer the environment Pebrel sets
+    # in the pane; the daemon resolves the window id (and re-resolves the pane)
+    # from agents.list when either is unknown.
+    try:
+        pane_id = int(os.environ.get("PEBREL_PANE_ID") or 0)
+    except ValueError:
+        pane_id = 0
     pending = state.Pending(
         session_id=session_id,
-        window_id=int(event.get("window_id") or 1),
-        pane_id=int(event.get("pane_id") or 0),
+        window_id=0,
+        pane_id=pane_id,
         questions=questions,
         appeared_at=now,
         last_activity=now,

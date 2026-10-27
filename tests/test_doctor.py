@@ -54,3 +54,21 @@ def test_doctor_fails_on_wrong_protocol_version(tmp_path):
     desc = {"protocol_version": 2, "capabilities": ["conversation.read", "conversation.choose"]}
     checks = doctor.run_all(tmp_path, {"channels": {}}, probe=lambda: desc)
     assert {c.name: c for c in checks}["pebrel protocol version"].status == "FAIL"
+
+
+def _probe_verdict(tmp_path, verdict):
+    spike = tmp_path / "spike.md"
+    spike.write_text(f"# spike\n\n## Result\n\nVERDICT: {verdict}\n", encoding="utf-8")
+    return doctor._answers_probe(spike)
+
+
+def test_answers_probe_fails_on_discarded(tmp_path):
+    assert _probe_verdict(tmp_path, "DISCARDED").status == "FAIL"
+
+
+def test_answers_probe_passes_on_accepted(tmp_path):
+    assert _probe_verdict(tmp_path, "ACCEPTED").status == "PASS"
+
+
+def test_answers_probe_skips_when_not_run(tmp_path):
+    assert _probe_verdict(tmp_path, "NOT_RUN").status == "SKIP"
