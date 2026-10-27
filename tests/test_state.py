@@ -67,3 +67,22 @@ def test_session_id_is_sanitised_for_filenames(tmp_path):
     names = [p.name for p in tmp_path.glob("pending_*")]
     assert all("/" not in n for n in names)
     assert len(state.load_all(tmp_path)) == 1
+
+
+def test_heartbeat_carries_process_identity(tmp_path):
+    state.write_heartbeat(tmp_path, when=1000.0, pid=4242,
+                          plugin_root="/plugin/root", version="0.2.0")
+    hb = state.read_heartbeat(tmp_path)
+    assert hb == {"at": 1000.0, "pid": 4242,
+                  "plugin_root": "/plugin/root", "version": "0.2.0"}
+    assert state.heartbeat_age(tmp_path, now=1010.0) == 10.0
+
+
+def test_read_heartbeat_returns_none_when_missing(tmp_path):
+    assert state.read_heartbeat(tmp_path) is None
+
+
+def test_legacy_heartbeat_without_pid_still_reads(tmp_path):
+    (tmp_path / "heartbeat.json").write_text('{"at": 5.0}')
+    hb = state.read_heartbeat(tmp_path)
+    assert hb["at"] == 5.0 and hb["pid"] is None

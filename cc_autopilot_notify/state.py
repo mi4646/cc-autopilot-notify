@@ -135,10 +135,27 @@ def bump_choose_failures(session_id: str, root: Path) -> int:
     return counter["n"]
 
 
-def write_heartbeat(root: Path, when: float) -> None:
+def write_heartbeat(root: Path, when: float, *, pid: int | None = None,
+                    plugin_root: str | None = None,
+                    version: str | None = None) -> None:
     root = Path(root)
     with _locked(root):
-        _atomic_write(root / f"{_HEARTBEAT}.json", {"at": float(when)})
+        _atomic_write(root / f"{_HEARTBEAT}.json",
+                      {"at": float(when), "pid": pid,
+                       "plugin_root": plugin_root, "version": version})
+
+
+def read_heartbeat(root: Path) -> dict | None:
+    path = Path(root) / f"{_HEARTBEAT}.json"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict) or not isinstance(data.get("at"), (int, float)):
+        return None
+    return {"at": float(data["at"]), "pid": data.get("pid"),
+            "plugin_root": data.get("plugin_root"),
+            "version": data.get("version")}
 
 
 def heartbeat_age(root: Path, now: float) -> float | None:
