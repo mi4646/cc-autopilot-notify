@@ -42,7 +42,7 @@ def _run_ps(script: str, timeout: float, powershell: str | None = None) -> str:
     return (result.stdout or "").strip()
 
 
-def is_foreground(powershell: str | None = None, timeout: float = 2.0) -> bool | None:
+def is_foreground(powershell: str | None = None, timeout: float = 5.0) -> bool | None:
     """True if the Claude Code terminal is foreground, False if not, None if unknown."""
     try:
         name = _run_ps(_SCRIPT, timeout, powershell)

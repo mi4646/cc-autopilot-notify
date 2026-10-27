@@ -1,6 +1,19 @@
 from cc_autopilot_notify import presence
 
 
+def test_default_timeout_covers_powershell_startup(monkeypatch):
+    """Add-Type cold start measures ~2s on WSL; a 2s default timed out."""
+    seen = []
+
+    def capture(_script, timeout, _powershell=None):
+        seen.append(timeout)
+        return "pebrel\n"
+
+    monkeypatch.setattr(presence, "_run_ps", capture)
+    assert presence.is_foreground() is True
+    assert seen == [5.0]
+
+
 def test_parses_foreground_match(monkeypatch):
     monkeypatch.setattr(presence, "_run_ps", lambda *a, **k: "pebrel\n")
     assert presence.is_foreground() is True
