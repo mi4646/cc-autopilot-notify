@@ -114,6 +114,29 @@ def _settings_clean() -> Check:
                  else "settings.json still references cc_autopilot_notify")
 
 
+def _answers_probe() -> Check:
+    """Path B's viability. Remains SKIP until someone runs the recorded probe.
+
+    A hook that answers questions cannot be tested from inside the session it
+    would answer, so this check reports the state of the spike document rather
+    than pretending to verify the behavior.
+    """
+    from pathlib import Path as _Path
+
+    spike = (_Path(__file__).resolve().parent.parent / "docs" / "spikes"
+             / "2026-10-27-permission-request-answers.md")
+    try:
+        text = spike.read_text(encoding="utf-8")
+    except OSError:
+        return Check("updatedInput.answers accepted", "SKIP", "no spike document")
+    if "NOT YET RUN" in text:
+        return Check("updatedInput.answers accepted", "SKIP",
+                     "unverified on this CC version; see the spike document")
+    if "Result: **A" in text or "accepted" in text.split("## Result", 1)[-1][:200]:
+        return Check("updatedInput.answers accepted", "PASS", "confirmed by probe")
+    return Check("updatedInput.answers accepted", "SKIP", "probe outcome unclear")
+
+
 def run_all(root: Path, cfg: dict, probe: Callable[[], dict] | None = None,
             now: float | None = None) -> list[Check]:
     now = time.time() if now is None else now
@@ -125,4 +148,5 @@ def run_all(root: Path, cfg: dict, probe: Callable[[], dict] | None = None,
     checks.append(_heartbeat(Path(root), now))
     checks.append(_feishu(cfg))
     checks.append(_settings_clean())
+    checks.append(_answers_probe())
     return checks
