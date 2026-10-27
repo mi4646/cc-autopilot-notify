@@ -11,6 +11,7 @@ import dataclasses
 import fcntl
 import json
 import logging
+import math
 import os
 import re
 import tempfile
@@ -163,6 +164,10 @@ def heartbeat_age(root: Path, now: float) -> float | None:
     path = Path(root) / f"{_HEARTBEAT}.json"
     try:
         at = float(json.loads(path.read_text(encoding="utf-8"))["at"])
-    except (OSError, ValueError, KeyError, TypeError):
+    except (OSError, ValueError, KeyError, TypeError, OverflowError):
+        # OverflowError covers a JSON integer too large for a float (e.g. 10**400).
+        return None
+    if not math.isfinite(at):
+        # JSON's Infinity/NaN cannot be a real heartbeat time.
         return None
     return now - at

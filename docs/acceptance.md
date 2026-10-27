@@ -66,13 +66,17 @@ at 300 s.
 
 ## Full suite
 
+Re-run 2026-10-27 after the plugin-packaging fix wave
+(`python -m pytest tests/ -q`, `bash tests/test_install_merge.sh`):
+
 ```
 $ python -m pytest tests/ -q
-77 passed
+156 passed
 
 $ bash tests/test_install_merge.sh
 OK: merge preserves existing entries and adds ours
 OK: real write path, foreign cwd, value restore
+OK: non-UTF-8 settings refused without touching anything
 ```
 
 ## Post-review fixes
@@ -123,7 +127,7 @@ The FAIL and the two SKIPs are the correct state before install.
 
 | Area | State |
 |---|---|
-| Unit tests | 77 passing |
+| Unit tests | 156 passing (2026-10-27, `python -m pytest tests/ -q`) |
 | Installer round trip (real write, foreign cwd, value restore) | verified |
 | Hook end-to-end (import, state, OSC, exit 0) | verified from an external cwd |
 | Pebrel protocol (describe / read / agents.list) | verified live |

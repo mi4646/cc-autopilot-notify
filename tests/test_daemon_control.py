@@ -34,6 +34,19 @@ def test_skips_other_root_when_pid_is_missing(tmp_path):
     assert (d.action, d.stale_pid) == ("skip", None)
 
 
+def test_should_spawn_rejects_non_positive_and_bool_pids(tmp_path):
+    for bad in (True, False, 0, -7, "7", 3.0):
+        state.write_heartbeat(tmp_path, when=100.0, pid=bad, plugin_root="/old")
+        d = daemon_control.should_spawn(tmp_path, "/new", now=105.0)
+        assert (d.action, d.stale_pid) == ("skip", None), bad
+
+
+def test_valid_pid_predicate():
+    assert daemon_control.valid_pid(7) == 7
+    for bad in (True, False, 0, -7, "7", 3.0, None):
+        assert daemon_control.valid_pid(bad) is None, bad
+
+
 def test_spawns_when_heartbeat_stale(tmp_path):
     state.write_heartbeat(tmp_path, when=100.0, pid=7, plugin_root="/p")
     assert daemon_control.should_spawn(tmp_path, "/p", now=130.0).action == "spawn"
@@ -112,9 +125,45 @@ def test_ensure_daemon_writes_status_to_stderr(tmp_path, monkeypatch, capsys):
 def test_stop_signals_heartbeat_pid(tmp_path, monkeypatch):
     state.write_heartbeat(tmp_path, when=time.time(), pid=99, plugin_root="/p")
     killed = []
+    monkeypatch.setattr(daemon_control, "owns_pid", lambda pid: True)
     monkeypatch.setattr(daemon_control.os, "kill", lambda pid, sig: killed.append(pid))
     assert daemon_control.stop(tmp_path) is True
     assert killed == [99]
+
+
+def test_stop_refuses_bool_zero_and_negative_pids(tmp_path, monkeypatch):
+    killed = []
+    monkeypatch.setattr(daemon_control, "owns_pid", lambda pid: True)
+    monkeypatch.setattr(daemon_control.os, "kill", lambda pid, sig: killed.append(pid))
+    for bad in (True, False, 0, -7):
+        state.write_heartbeat(tmp_path, when=time.time(), pid=bad, plugin_root="/p")
+        assert daemon_control.stop(tmp_path) is False, bad
+    assert killed == []
+
+
+def test_stop_fails_closed_when_process_identity_is_unconfirmed(tmp_path, monkeypatch):
+    state.write_heartbeat(tmp_path, when=time.time(), pid=99, plugin_root="/p")
+    killed = []
+    monkeypatch.setattr(daemon_control, "owns_pid", lambda pid: False)
+    monkeypatch.setattr(daemon_control.os, "kill", lambda pid, sig: killed.append(pid))
+    assert daemon_control.stop(tmp_path) is False
+    assert killed == []
+
+
+def test_owns_pid_rejects_unreadable_or_foreign_processes():
+    # A pid that cannot be read from /proc is never assumed to be ours.
+    assert daemon_control.owns_pid(999_999_999) is False
+    assert daemon_control.owns_pid(0) is False
+    assert daemon_control.owns_pid(True) is False
+
+
+def test_wait_gone_ignores_invalid_pids(monkeypatch):
+    called = []
+    monkeypatch.setattr(daemon_control.os, "kill", lambda pid, sig: called.append(pid))
+    assert daemon_control.wait_gone(0) is True
+    assert daemon_control.wait_gone(-1) is True
+    assert daemon_control.wait_gone(True) is True
+    assert called == []
 
 
 def test_stop_returns_false_without_pid(tmp_path):

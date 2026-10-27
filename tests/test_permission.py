@@ -23,7 +23,7 @@ def test_main_returns_without_reading_stdin_when_disabled(tmp_path, monkeypatch)
     assert fake.read_calls == 0
 
 
-def test_main_reads_stdin_when_enabled(tmp_path, monkeypatch, capsys):
+def test_main_reads_stdin_when_enabled(tmp_path, monkeypatch):
     cfg = tmp_path / "config.json"
     cfg.write_text(json.dumps({"path_b": {"enabled": True}}))
     monkeypatch.setenv("CC_AUTOPILOT_CONFIG", str(cfg))

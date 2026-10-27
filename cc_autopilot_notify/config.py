@@ -14,6 +14,7 @@ import json
 import logging
 import os
 import re
+import tempfile
 from pathlib import Path
 
 log = logging.getLogger(__name__)
@@ -193,8 +194,9 @@ def feishu_webhook(cfg: dict) -> str | None:
     """Direct URL first; otherwise the env var the config names."""
     feishu = _section(_section(cfg, "channels"), "feishu")
     direct = feishu.get("webhook")
-    if isinstance(direct, str) and direct:
-        return direct
+    # Whitespace-only is a typo, not a webhook: treat it like "" and fall back.
+    if isinstance(direct, str) and direct.strip():
+        return direct.strip()
     env_name = feishu.get("webhook_env")
     if not env_name:
         return None
@@ -216,12 +218,28 @@ def default_path() -> Path:
 
 
 def write_default(path: Path) -> None:
+    """Create the default config with mode 0600; never overwrite an existing file.
+
+    SessionStart can fire from several sessions at once, so the file is written
+    to a private temp file and moved into place instead of being truncated in
+    place. If the target already exists it is left exactly as the user wrote it.
+    """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8") as handle:
-        json.dump(copy.deepcopy(DEFAULTS), handle, ensure_ascii=False, indent=2)
-    os.chmod(path, 0o600)
+    if path.exists():
+        return
+    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=".tmp-", suffix=".json")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(copy.deepcopy(DEFAULTS), handle, ensure_ascii=False, indent=2)
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 def judge_model(cfg: dict) -> str | None:

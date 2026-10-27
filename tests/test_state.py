@@ -97,3 +97,16 @@ def test_read_heartbeat_returns_none_for_malformed_payloads(tmp_path):
 
     (tmp_path / "heartbeat.json").write_text('{"at": ' + str(10**400) + "}")
     assert state.read_heartbeat(tmp_path) is None
+
+
+def test_heartbeat_age_returns_none_for_overflow_and_non_finite(tmp_path):
+    heartbeat = tmp_path / "heartbeat.json"
+    for payload in (f'{{"at": {10 ** 400}}}', '{"at": Infinity}', '{"at": NaN}'):
+        heartbeat.write_text(payload)
+        assert state.heartbeat_age(tmp_path, now=1.0) is None, payload
+
+
+def test_heartbeat_age_keeps_working_for_normal_values(tmp_path):
+    (tmp_path / "heartbeat.json").write_text('{"at": 100.5}')
+    assert state.heartbeat_age(tmp_path, now=101.0) == 0.5
+

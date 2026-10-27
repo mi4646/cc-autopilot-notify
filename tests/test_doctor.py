@@ -43,6 +43,12 @@ def test_doctor_reports_fresh_heartbeat_as_pass(tmp_path):
     assert {c.name: c for c in checks}["daemon heartbeat"].status == "PASS"
 
 
+def test_doctor_fails_instead_of_raising_on_huge_heartbeat_timestamp(tmp_path):
+    (tmp_path / "heartbeat.json").write_text(f'{{"at": {10 ** 400}}}')
+    checks = doctor.run_all(tmp_path, {"channels": {}}, probe=lambda: {"ok": False})
+    assert {c.name: c for c in checks}["daemon heartbeat"].status == "FAIL"
+
+
 def test_doctor_passes_runtime_check_when_capabilities_present(tmp_path):
     desc = {"protocol_version": 1, "capabilities": ["conversation.read", "conversation.choose"]}
     checks = doctor.run_all(tmp_path, {"channels": {}}, probe=lambda: desc)

@@ -1,4 +1,6 @@
 import json
+import os
+import stat
 
 from cc_autopilot_notify import config
 
@@ -143,6 +145,15 @@ def test_empty_direct_webhook_falls_back_to_env(tmp_path, monkeypatch):
     assert config.feishu_webhook(cfg) == "https://env.example/x"
 
 
+def test_whitespace_direct_webhook_is_unconfigured(tmp_path, monkeypatch):
+    monkeypatch.setenv("CC_AUTOPILOT_FEISHU_WEBHOOK", "https://env.example/x")
+    cfg = _load(tmp_path, {"channels": {"feishu": {"webhook": "   "}}})
+    assert config.feishu_webhook(cfg) == "https://env.example/x"
+
+    monkeypatch.delenv("CC_AUTOPILOT_FEISHU_WEBHOOK", raising=False)
+    assert config.feishu_webhook(cfg) is None
+
+
 def test_bad_webhook_type_raises(tmp_path):
     _assert_config_error(tmp_path, {"channels": {"feishu": {"webhook": 5}}})
 
@@ -170,3 +181,12 @@ def test_write_default_is_private(tmp_path):
     config.write_default(target)
     assert json.loads(target.read_text())["daemon"]["enabled"] is True
     assert (target.stat().st_mode & 0o777) == 0o600
+
+
+def test_write_default_never_overwrites_an_existing_file(tmp_path):
+    target = tmp_path / "config.json"
+    target.write_text('{"enabled": false}\n')
+    os.chmod(target, 0o644)
+    config.write_default(target)
+    assert target.read_text() == '{"enabled": false}\n'
+    assert stat.S_IMODE(target.stat().st_mode) == 0o644

@@ -1,9 +1,28 @@
-"""Retire a legacy direct install without touching unrelated entries."""
+"""Retire a legacy direct install without touching unrelated entries.
+
+Cross-file replacement is not transactional on a plain filesystem, so the order
+below is deliberate and is the best recovery available:
+
+1. Read both input files and build both output documents in memory. An
+   unreadable or invalid ``settings.json`` aborts before anything is written.
+2. Stage every output as a private temp file in its destination directory and
+   create the settings backup (mode 0600) before replacing either original.
+3. Replace ``config.json`` first, ``settings.json`` second.
+
+A failure before the first replace leaves both originals untouched. A failure
+between the two replaces leaves the webhook in both places: the config is
+already correct and settings still carries the env fallback. That is a
+duplicate, never a loss, and re-running the migration finishes the job. The
+settings document is only committed with the env key removed after the config
+output has been staged and replaced, so a config write failure can never remove
+the only copy of the webhook.
+"""
 
 from __future__ import annotations
 
 import json
 import os
+import stat
 import subprocess
 import sys
 import tempfile
@@ -12,11 +31,12 @@ from pathlib import Path
 
 
 class MigrationError(Exception):
-    """Abort the whole migration; nothing was written."""
+    """Abort the migration; the message names what was and was not written."""
 
 
 WEBHOOK_ENV = "CC_AUTOPILOT_FEISHU_WEBHOOK"
 AFK_KEY = "CLAUDE_AFK_TIMEOUT_MS"
+BACKUP_ATTEMPTS = 100
 
 
 def _read_json(path: Path) -> dict:
@@ -35,21 +55,67 @@ def _read_json(path: Path) -> dict:
     return data
 
 
-def _write_json(path: Path, data: dict) -> None:
+def _unlink(path: str | Path) -> None:
+    try:
+        os.unlink(path)
+    except OSError:
+        pass
+
+
+def _stage_json(path: Path, data: dict, *, mode: int | None = None) -> str:
+    """Serialize `data` to a private temp file next to `path`; return its path.
+
+    Serialization happens here, before any original is replaced: a document
+    that cannot be written leaves every input file untouched.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
-    mode = path.stat().st_mode if path.exists() else 0o600
+    if mode is None:
+        mode = stat.S_IMODE(path.stat().st_mode) if path.exists() else 0o600
     fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=".tmp-", suffix=".json")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             json.dump(data, handle, ensure_ascii=False, indent=2)
-        os.chmod(tmp, mode & 0o777)
-        os.replace(tmp, path)
+        os.chmod(tmp, mode)
     except BaseException:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
+        _unlink(tmp)
         raise
+    return tmp
+
+
+def _backup_settings(settings: Path) -> Path:
+    """Copy the original settings aside, private, before any replacement."""
+    base = f"{settings.name}.bak-{time.strftime('%Y%m%d-%H%M%S')}"
+    for attempt in range(BACKUP_ATTEMPTS):
+        candidate = settings.with_name(base if attempt == 0 else f"{base}-{attempt}")
+        try:
+            fd = os.open(candidate, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        except FileExistsError:
+            continue
+        except OSError as exc:
+            raise MigrationError(f"cannot create backup {candidate}: {exc}") from exc
+        try:
+            with os.fdopen(fd, "wb") as handle:
+                handle.write(settings.read_bytes())
+        except OSError as exc:
+            _unlink(candidate)
+            raise MigrationError(f"cannot write backup {candidate}: {exc}") from exc
+        return candidate
+    raise MigrationError(f"cannot create a unique backup next to {settings}")
+
+
+def _replace_all(staged: list[tuple[str, Path]]) -> None:
+    """Commit staged files in order; convert OSError into MigrationError."""
+    for index, (tmp, path) in enumerate(staged):
+        try:
+            os.replace(tmp, path)
+        except OSError as exc:
+            _unlink(tmp)
+            for leftover, _ in staged[index + 1:]:
+                _unlink(leftover)
+            done = [str(p) for _, p in staged[:index]]
+            detail = (f"; already replaced: {', '.join(done)}" if done else
+                      "; no file was replaced")
+            raise MigrationError(f"cannot write {path}: {exc}{detail}") from exc
 
 
 def _is_our_hook(hook: dict) -> bool:
@@ -91,12 +157,22 @@ def _stop_unit(unit: Path, run_systemctl: bool) -> bool:
         return False
     if "cc_autopilot_notify" not in text:
         return False
-    if run_systemctl and subprocess.run(
-            ["systemctl", "--user", "disable", "--now", unit.name],
-            capture_output=True).returncode not in (0,):
-        # Not fatal: the unit file still has to go, or it restarts on login.
-        print(f"warn: could not stop {unit.name}", file=sys.stderr)
-    unit.unlink(missing_ok=True)
+    if run_systemctl:
+        try:
+            result = subprocess.run(
+                ["systemctl", "--user", "disable", "--now", unit.name],
+                capture_output=True)
+        except OSError as exc:
+            print(f"warn: could not run systemctl ({exc})", file=sys.stderr)
+        else:
+            if result.returncode != 0:
+                # Not fatal: the unit file still has to go, or it restarts on login.
+                print(f"warn: could not stop {unit.name}", file=sys.stderr)
+    try:
+        unit.unlink(missing_ok=True)
+    except OSError as exc:
+        # The settings/config migration already succeeded; report, don't undo.
+        print(f"warn: could not remove {unit}: {exc}", file=sys.stderr)
     return True
 
 
@@ -118,17 +194,18 @@ def migrate(settings: Path, config_path: Path, unit: Path,
         else:
             data.pop("_ccAutopilotPrevious", None)
 
+    config_data = None
     moved = False
     if isinstance(legacy_webhook, str) and legacy_webhook:
-        cfg = _read_json(config_path)
+        cfg = _read_json(config_path)      # also aborts before any write
         channels = cfg.setdefault("channels", {})
         feishu = channels.setdefault("feishu", {})
         if not feishu.get("webhook"):
             feishu["webhook"] = legacy_webhook
-            _write_json(config_path, cfg)
-            os.chmod(config_path, 0o600)
+            config_data = cfg
             moved = True
-        if moved:
+            # The staged settings omit the env key, but they are committed
+            # second: a failed config write leaves the original env intact.
             env.pop(WEBHOOK_ENV, None)
 
     if env:
@@ -136,14 +213,32 @@ def migrate(settings: Path, config_path: Path, unit: Path,
     else:
         data.pop("env", None)
 
+    # Build every output before touching either original. A serialization or
+    # staging failure therefore leaves settings and config exactly as they were.
+    staged: list[tuple[str, Path]] = []
+    try:
+        if config_data is not None:
+            # A file that now holds a credential is private regardless of what
+            # mode the pre-existing config had.
+            staged.append((_stage_json(config_path, config_data, mode=0o600),
+                           config_path))
+        if removed or moved:
+            staged.append((_stage_json(settings, data), settings))
+    except (OSError, TypeError, ValueError) as exc:
+        for tmp, _ in staged:
+            _unlink(tmp)
+        raise MigrationError(f"cannot stage migration output: {exc}") from exc
+
+    backup = None
     if removed or moved:
-        backup = settings.with_name(
-            f"{settings.name}.bak-{time.strftime('%Y%m%d-%H%M%S')}")
         if settings.exists():
-            backup.write_bytes(settings.read_bytes())
-            # The backup still holds the webhook secret; never leave it readable.
-            os.chmod(backup, 0o600)
-        _write_json(settings, data)
+            try:
+                backup = _backup_settings(settings)
+            except MigrationError:
+                for tmp, _ in staged:
+                    _unlink(tmp)
+                raise
+    _replace_all(staged)
     stopped = _stop_unit(unit, run_systemctl)
 
     parts = []
@@ -155,6 +250,8 @@ def migrate(settings: Path, config_path: Path, unit: Path,
         parts.append(f"removed {unit}")
     if legacy_afk is not None:
         parts.append(f"kept {AFK_KEY}={legacy_afk}")
+    if backup is not None:
+        parts.append(f"backup {backup}")
     return "; ".join(parts) if parts else "nothing to migrate"
 
 

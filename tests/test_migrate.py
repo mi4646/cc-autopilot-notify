@@ -1,5 +1,6 @@
 import json
 import stat
+from pathlib import Path
 
 import pytest
 
@@ -131,3 +132,87 @@ def test_second_run_is_a_no_op(tmp_path):
                               tmp_path / "u.service", run_systemctl=False)
     assert "nothing to migrate" in summary
     assert settings.read_bytes() == first
+
+
+def _failing_replace(monkeypatch, fail_on):
+    real_replace = migrate.os.replace
+
+    def replace(src, dst):
+        if Path(dst) == fail_on:
+            raise OSError("simulated write failure")
+        real_replace(src, dst)
+
+    monkeypatch.setattr(migrate.os, "replace", replace)
+
+
+def test_settings_write_failure_is_controlled_and_keeps_env(tmp_path, monkeypatch):
+    """The later write can fail: config is already correct, settings is intact.
+
+    Cross-file replacement is not transactional, so the migration replaces the
+    config first. A failing settings write therefore leaves a duplicate (safe)
+    rather than dropping the only webhook copy, and the error is controlled.
+    """
+    settings = _settings(tmp_path, {
+        "env": {"CC_AUTOPILOT_FEISHU_WEBHOOK": "https://hook.example/x",
+                "KEEP": "1"},
+        "hooks": {"Stop": [{"matcher": "", "hooks": [_ours()]}]}})
+    config_path = tmp_path / "cfg" / "config.json"
+    original = settings.read_bytes()
+    _failing_replace(monkeypatch, settings)
+
+    with pytest.raises(migrate.MigrationError) as excinfo:
+        migrate.migrate(settings, config_path, tmp_path / "u.service",
+                        run_systemctl=False)
+
+    assert settings.read_bytes() == original
+    assert json.loads(settings.read_text())["env"]["CC_AUTOPILOT_FEISHU_WEBHOOK"] == \
+        "https://hook.example/x"
+    assert json.loads(config_path.read_text())["channels"]["feishu"]["webhook"] == \
+        "https://hook.example/x"
+    assert "already replaced" in str(excinfo.value)
+    backups = list(tmp_path.glob("settings.json.bak-*"))
+    assert len(backups) == 1
+    assert stat.S_IMODE(backups[0].stat().st_mode) == 0o600
+    assert not list(tmp_path.rglob(".tmp-*"))
+
+
+def test_config_write_failure_leaves_settings_untouched(tmp_path, monkeypatch):
+    settings = _settings(tmp_path, {
+        "env": {"CC_AUTOPILOT_FEISHU_WEBHOOK": "https://hook.example/x"},
+        "hooks": {"Stop": [{"matcher": "", "hooks": [_ours()]}]}})
+    config_path = tmp_path / "cfg" / "config.json"
+    original = settings.read_bytes()
+    _failing_replace(monkeypatch, config_path)
+
+    with pytest.raises(migrate.MigrationError) as excinfo:
+        migrate.migrate(settings, config_path, tmp_path / "u.service",
+                        run_systemctl=False)
+
+    assert settings.read_bytes() == original
+    assert not config_path.exists()
+    assert "no file was replaced" in str(excinfo.value)
+    assert not list(tmp_path.rglob(".tmp-*"))
+
+
+def test_staging_failure_writes_nothing(tmp_path, monkeypatch):
+    settings = _settings(tmp_path, {
+        "env": {"CC_AUTOPILOT_FEISHU_WEBHOOK": "https://hook.example/x"},
+        "hooks": {"Stop": [{"matcher": "", "hooks": [_ours()]}]}})
+    config_path = tmp_path / "config.json"
+    original = settings.read_bytes()
+    real_stage = migrate._stage_json
+
+    def stage(path, data, **kwargs):
+        if Path(path) == settings:
+            raise TypeError("not serializable")
+        return real_stage(path, data, **kwargs)
+
+    monkeypatch.setattr(migrate, "_stage_json", stage)
+
+    with pytest.raises(migrate.MigrationError):
+        migrate.migrate(settings, config_path, tmp_path / "u.service",
+                        run_systemctl=False)
+
+    assert settings.read_bytes() == original
+    assert not config_path.exists()
+    assert not list(tmp_path.glob(".tmp-*"))

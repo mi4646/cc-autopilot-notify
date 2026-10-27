@@ -30,6 +30,43 @@ class Decision:
     stale_pid: int | None = None
 
 
+def valid_pid(value) -> int | None:
+    """A pid worth returning or signalling: positive int, never bool/0/negative.
+
+    ``bool`` is an ``int`` subclass and ``0`` means "the caller's process
+    group" to ``os.kill``; both must be rejected before any liveness decision.
+    """
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        return None
+    return value
+
+
+def _proc_cmdline(pid: int) -> list[str] | None:
+    """Linux/WSL only: the process's argv, or None when it cannot be read."""
+    try:
+        raw = Path(f"/proc/{pid}/cmdline").read_bytes()
+    except OSError:
+        return None
+    return [part.decode("utf-8", "replace") for part in raw.split(b"\0") if part]
+
+
+def owns_pid(pid: int) -> bool:
+    """Confirm `pid` is our daemon before signalling it.
+
+    A heartbeat can outlive its process, and the kernel may have handed the
+    number to an unrelated process. Identity is read from /proc rather than
+    trusted from the file; when it cannot be confirmed we fail closed and
+    signal nothing.
+    """
+    if valid_pid(pid) is None:
+        return False
+    args = _proc_cmdline(pid)
+    if not args:
+        return False
+    joined = " ".join(args)
+    return "cc_autopilot_notify" in joined and "daemon" in args
+
+
 def should_spawn(root: Path, plugin_root: str, now: float | None = None) -> Decision:
     now = time.time() if now is None else now
     hb = state.read_heartbeat(root)
@@ -38,12 +75,12 @@ def should_spawn(root: Path, plugin_root: str, now: float | None = None) -> Deci
     age = now - hb["at"]
     if age >= POLL_STALE_SECONDS:
         return Decision("spawn", f"heartbeat stale by {age:.0f}s")
-    pid = hb.get("pid")
+    pid = valid_pid(hb.get("pid"))
     if hb.get("plugin_root") != plugin_root:
         # Only a heartbeat that names its process can be replaced safely. A
         # legacy (or pid-less) daemon cannot be stopped, and spawning anyway
         # would leave two loops answering the same questions.
-        if isinstance(pid, int) and not isinstance(pid, bool):
+        if pid is not None:
             return Decision("replace", "plugin root changed", stale_pid=pid)
         return Decision(
             "skip", "unmanaged daemon alive with no pid; run /cc-autopilot-notify:migrate")
@@ -81,8 +118,12 @@ def start(root: Path, plugin_root: str) -> int:
 
 def stop(root: Path) -> bool:
     hb = state.read_heartbeat(root)
-    pid = (hb or {}).get("pid")
-    if not isinstance(pid, int):
+    pid = valid_pid((hb or {}).get("pid"))
+    if pid is None:
+        return False
+    if not owns_pid(pid):
+        log.warning("daemon_control: refusing to signal pid %s: "
+                    "process identity not confirmed", pid)
         return False
     try:
         os.kill(pid, signal.SIGTERM)
@@ -94,6 +135,9 @@ def stop(root: Path) -> bool:
 
 def wait_gone(pid: int, timeout: float = 5.0) -> bool:
     """Wait for `pid` to exit, so a replacement never overlaps the old daemon."""
+    pid = valid_pid(pid)
+    if pid is None:
+        return True
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         try:

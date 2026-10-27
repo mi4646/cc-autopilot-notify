@@ -201,7 +201,7 @@
 
 - `install.sh` / `uninstall.sh` 保持现状，继续作为不使用插件时的直装路径。
 - 两者写入的 hook 命令与新插件 hooks 会**同时生效**，因此迁移是安装插件后的必要步骤；`doctor` 的 `legacy install` 检查负责暴露该状态。
-- 现有 95 个 Python 测试与 `tests/test_install_merge.sh` 不受影响。
+- 现有 Python 测试与 `tests/test_install_merge.sh` 不受影响。
 - 状态目录、配置目录、Tier 判定逻辑均不变。
 
 ---
