@@ -68,20 +68,40 @@ at 300 s.
 
 ```
 $ python -m pytest tests/ -q
-68 passed
+77 passed
 
 $ bash tests/test_install_merge.sh
 OK: merge preserves existing entries and adds ours
+OK: real write path, foreign cwd, value restore
 ```
+
+## Post-review fixes
+
+A fresh-context review of the whole branch found four Critical wire-format
+defects that the unit tests could not see (they injected a fake `read`). All
+were fixed with tests that assert the real shape:
+
+| Defect | Fix | Verified by |
+|---|---|---|
+| Hooks could not import the package | `PYTHONPATH` in `run_hook.py` and every installed hook command | ran from `/tmp`, exit 0, state file written |
+| `pane_id`/`window_id` fabricated; runtime refuses pane 0 | `PEBREL_PANE_ID`, then `agents.list` resolves session → (window, pane) | live: pane 0 refused, real pane reads |
+| `conversation.choose` missing `identity.epoch` | epoch passed from `read`'s `identity` | `test_choose_sends_the_fields_the_live_server_requires` |
+| `prompt_id` read from a key `read` never returns | `prompt_id_of()` searches the prompt and the top level; missing → give up loudly | `test_missing_prompt_id_gives_up_instead_of_guessing` |
+
+The live `choose` call still has **not** been observed succeeding, because no
+live pane currently returns a non-null `prompt`. What is proven is that the
+client no longer sends a request the server is documented to reject.
 
 ## Install / uninstall round trip
 
-Verified on a temp copy of a realistic settings file:
+Verified on a temp copy of a realistic settings file, run from a foreign cwd:
 
-- after install: existing `env.KEEP_ME`, existing `PreToolUse` hook, and our
-  new entries all present
-- after uninstall: exact same file as before install, `0` occurrences of
-  `cc_autopilot_notify` or `CLAUDE_AFK_TIMEOUT_MS`
+- after install: existing `env.KEEP_ME`, existing `PreToolUse` hook, our
+  entries, `config.json`, and the unit all present
+- hook commands carry `PYTHONPATH`
+- a pre-existing `CLAUDE_AFK_TIMEOUT_MS` of `"600000"` survives install
+  (with `CC_AUTOPILOT_FORCE=1`) and is **restored** by uninstall
+- `StopFailure` is wired
 
 ## doctor on this machine
 
@@ -90,27 +110,29 @@ PASS  claude version: 2.1.308 (Claude Code)
 PASS  pebrel runtime: app 2.3.1 (7311e07)
 PASS  pebrel protocol version: protocol_version=1 (expected 1)
 PASS  pebrel conversation capabilities: conversation.read+choose
-PASS  powershell foreground: foreground=True
+PASS  powershell foreground: foreground=False
 FAIL  daemon heartbeat: no heartbeat file; daemon not running
 SKIP  feishu webhook: not configured
-PASS  settings residue: no cc_autopilot_notify entries
+SKIP  hooks installed: not installed yet
 SKIP  updatedInput.answers accepted: unverified on this CC version
 ```
 
-Two of these are expected before install (daemon not started, webhook unset).
-The third is the honest state of path B.
+The FAIL and the two SKIPs are the correct state before install.
 
 ## Summary
 
 | Area | State |
 |---|---|
-| Unit tests | 68 passing |
+| Unit tests | 77 passing |
+| Installer round trip (real write, foreign cwd, value restore) | verified |
+| Hook end-to-end (import, state, OSC, exit 0) | verified from an external cwd |
+| Pebrel protocol (describe / read / agents.list) | verified live |
 | Terminal + Pebrel channels | verified live |
-| Feishu | blocked on a webhook |
-| Install/uninstall | verified by round trip |
-| Dual thresholds (live) | **not run** |
+| Feishu | blocked on a webhook; body-code handling unit-tested |
+| Live `conversation.choose` success | **not observed** — no live non-null `prompt` yet |
+| Dual thresholds (wall clock) | **not run** |
 | Path B (`updatedInput.answers`) | **not verified on 2.1.308** |
-| Path A (Pebrel `conversation.choose`) | protocol verified; live auto-answer **not run** |
 
-The three not-run items all need the same thing: installing into the global
-Claude Code settings and starting a fresh session with the daemon up.
+The three not-run items need the same thing: install into the global Claude
+Code settings, start the daemon, and ask one real question.
+
