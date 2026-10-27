@@ -25,6 +25,14 @@ def test_corrupt_json_falls_back_to_defaults(tmp_path, caplog):
     assert any("config" in r.message.lower() for r in caplog.records)
 
 
+def test_undecodable_bytes_fall_back_to_defaults(tmp_path, caplog):
+    p = tmp_path / "c.json"
+    p.write_bytes(b'{"enabled": true}\xff\xfe')
+    cfg = config.load(p)
+    assert config.foreground_seconds(cfg) == 150
+    assert any("config" in r.message.lower() for r in caplog.records)
+
+
 def test_invalid_threshold_raises(tmp_path):
     p = tmp_path / "c.json"
     p.write_text(json.dumps({"thresholds": {"foreground_seconds": "soon"}}))

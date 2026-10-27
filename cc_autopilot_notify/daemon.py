@@ -206,7 +206,8 @@ def run(root: Path, cfg: dict, appdata: Path | None = None) -> None:
     deps = build_deps(appdata, cfg)
     while True:
         try:
-            tick(time.time(), Path(root), cfg, deps)
+            for action in tick(time.time(), Path(root), cfg, deps):
+                log.info("daemon: %s", action)
         except Exception:  # noqa: BLE001 - the daemon must outlive any one tick
             log.exception("daemon: tick raised")
         time.sleep(POLL_SECONDS)

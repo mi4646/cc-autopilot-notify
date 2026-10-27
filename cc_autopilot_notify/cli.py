@@ -41,8 +41,13 @@ def _test_channel(name: str) -> int:
 
 
 def _daemon() -> int:
+    import logging
+
     from . import config, daemon, hook_common
 
+    # Actions are only observable if the logger speaks; systemd captures stderr.
+    logging.basicConfig(level=logging.INFO,
+                        format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     daemon.run(hook_common.state_root(), config.load())
     return 0
 

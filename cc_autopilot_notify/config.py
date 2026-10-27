@@ -68,7 +68,7 @@ def load(path: Path | None = None) -> dict:
         return copy.deepcopy(DEFAULTS)
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         log.warning("config: cannot read %s (%s); using defaults", path, exc)
         return copy.deepcopy(DEFAULTS)
     if not isinstance(raw, dict):
