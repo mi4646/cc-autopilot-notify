@@ -1,3 +1,4 @@
+import datetime
 import json
 import os
 import stat
@@ -190,3 +191,33 @@ def test_write_default_never_overwrites_an_existing_file(tmp_path):
     config.write_default(target)
     assert target.read_text() == '{"enabled": false}\n'
     assert stat.S_IMODE(target.stat().st_mode) == 0o644
+
+
+def test_notify_dedupe_seconds_default_and_validation(tmp_path):
+    assert config.notify_dedupe_seconds(config.load(tmp_path / "absent.json")) == 300
+    assert config.notify_dedupe_seconds(_load(tmp_path, {"notify": {"dedupe_seconds": 0}})) == 0
+    _assert_config_error(tmp_path, {"notify": {"dedupe_seconds": -1}})
+    _assert_config_error(tmp_path, {"notify": {"dedupe_seconds": True}})
+
+
+def _at(hour, minute):
+    return datetime.datetime(2026, 10, 27, hour, minute).timestamp()
+
+
+def test_quiet_hours_same_day_window():
+    cfg = {"quiet_hours": {"enabled": True, "start": "01:00", "end": "05:00"}}
+    assert config.in_quiet_hours(cfg, now=_at(3, 0)) is True
+    assert config.in_quiet_hours(cfg, now=_at(6, 0)) is False
+
+
+def test_quiet_hours_overnight_window():
+    cfg = {"quiet_hours": {"enabled": True, "start": "22:00", "end": "06:00"}}
+    assert config.in_quiet_hours(cfg, now=_at(23, 0)) is True
+    assert config.in_quiet_hours(cfg, now=_at(5, 59)) is True
+    assert config.in_quiet_hours(cfg, now=_at(6, 0)) is False
+    assert config.in_quiet_hours(cfg, now=_at(12, 0)) is False
+
+
+def test_quiet_hours_disabled():
+    cfg = {"quiet_hours": {"enabled": False, "start": "00:00", "end": "23:59"}}
+    assert config.in_quiet_hours(cfg, now=_at(12, 0)) is False

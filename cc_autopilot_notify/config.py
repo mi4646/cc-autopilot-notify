@@ -15,6 +15,7 @@ import logging
 import os
 import re
 import tempfile
+import time
 from pathlib import Path
 
 log = logging.getLogger(__name__)
@@ -37,6 +38,7 @@ DEFAULTS: dict = {
     },
     "path_b": {"enabled": False},
     "daemon": {"enabled": True},
+    "notify": {"dedupe_seconds": 300},
     "quiet_hours": {"enabled": False, "start": "00:00", "end": "09:00"},
     "min_duration_seconds": 30,
 }
@@ -150,6 +152,12 @@ def _validate(cfg: dict) -> None:
     daemon = _require_object(cfg, "daemon")
     _require_bool(daemon, "enabled", "daemon.enabled")
 
+    notify = _require_object(cfg, "notify")
+    dedupe = notify.get("dedupe_seconds")
+    if not _is_int(dedupe) or dedupe < 0:
+        raise ConfigError(
+            f"notify.dedupe_seconds must be a non-negative integer, got {dedupe!r}")
+
     if not _is_int(cfg.get("min_duration_seconds")) or cfg["min_duration_seconds"] < 0:
         raise ConfigError(
             f"min_duration_seconds must be a non-negative integer, "
@@ -244,3 +252,35 @@ def write_default(path: Path) -> None:
 
 def judge_model(cfg: dict) -> str | None:
     return _section(cfg, "judge").get("model") or None
+
+
+def notify_dedupe_seconds(cfg: dict) -> int:
+    """Suppress an identical notification repeated within this many seconds."""
+    return int(_section(cfg, "notify").get("dedupe_seconds", 300))
+
+
+def in_quiet_hours(cfg: dict, now: float | None = None) -> bool:
+    """True when local time falls inside the configured quiet window.
+
+    Windows may wrap midnight (start > end). A start equal to end means the
+    whole day, matching the usual cron-style reading.
+    """
+    quiet = _section(cfg, "quiet_hours")
+    if quiet.get("enabled") is not True:
+        return False
+    start, end = quiet.get("start"), quiet.get("end")
+    if not isinstance(start, str) or not isinstance(end, str):
+        return False
+    try:
+        sh, sm = (int(part) for part in start.split(":"))
+        eh, em = (int(part) for part in end.split(":"))
+    except ValueError:
+        return False
+    clock = time.localtime(time.time() if now is None else now)
+    minutes = clock.tm_hour * 60 + clock.tm_min
+    start_min, end_min = sh * 60 + sm, eh * 60 + em
+    if start_min == end_min:
+        return True
+    if start_min < end_min:
+        return start_min <= minutes < end_min
+    return minutes >= start_min or minutes < end_min

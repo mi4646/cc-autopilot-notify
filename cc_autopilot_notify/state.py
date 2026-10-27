@@ -171,3 +171,35 @@ def heartbeat_age(root: Path, now: float) -> float | None:
         # JSON's Infinity/NaN cannot be a real heartbeat time.
         return None
     return now - at
+
+
+_SEEN = "notify_seen.json"
+
+
+def seen_recently(root: Path, key: str, now: float, window: float) -> bool:
+    """True when `key` was marked within `window` seconds."""
+    if window <= 0:
+        return False
+    try:
+        data = json.loads((Path(root) / _SEEN).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    last = data.get(key) if isinstance(data, dict) else None
+    return isinstance(last, (int, float)) and now - last < window
+
+
+def mark_seen(root: Path, key: str, now: float) -> None:
+    root = Path(root)
+    with _locked(root):
+        path = root / _SEEN
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            data = {}
+        if not isinstance(data, dict):
+            data = {}
+        cutoff = now - 86400  # one day of history is plenty for dedupe
+        data = {k: v for k, v in data.items()
+                if isinstance(v, (int, float)) and v >= cutoff}
+        data[key] = float(now)
+        _atomic_write(path, data)

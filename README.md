@@ -23,6 +23,21 @@ and win. Path B blocks the dialog, which is why it is off unless you ask for it.
 Idle thresholds: **150 s** while the terminal is focused, **90 s** otherwise.
 Touching the dialog resets the timer.
 
+### Notification policy
+
+- **Questions** notify immediately (`PreToolUse` on `AskUserQuestion`).
+- **"Claude finished"** uses Claude Code's own `idle_prompt` notification: it
+  fires about 60 s after Claude stops, only if you have not typed and no
+  background agent is still running. `Stop` itself fires every turn, so it is
+  deliberately silent; `StopFailure` still notifies.
+- Only notifications that need a human are forwarded: `idle_prompt`,
+  `permission_prompt`, `agent_needs_input`, and elicitation dialogs. Progress
+  and background-completion notifications are dropped.
+- An identical notification is suppressed for `notify.dedupe_seconds`
+  (default 300).
+- `quiet_hours` silences `idle_prompt` inside the window; approval and error
+  notifications still get through.
+
 ## Install (plugin)
 
 ```bash

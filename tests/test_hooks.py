@@ -32,13 +32,92 @@ def test_notification_channel_failure_still_returns_zero(tmp_path, monkeypatch):
     assert hook_pre_tool.handle(_auq_event(), tmp_path, cfg) == 0
 
 
-def test_stop_event_notifies(tmp_path, monkeypatch):
+def _capture(monkeypatch):
     import cc_autopilot_notify.channels as channels
     seen = []
-    monkeypatch.setattr(channels, "send_all", lambda n, c: seen.append(n.title) or [])
+    monkeypatch.setattr(channels, "send_all", lambda n, c: seen.append(n) or [])
+    return seen
+
+
+def test_stop_event_does_not_notify(tmp_path, monkeypatch):
+    """Stop fires every turn; a notification per turn is the bug being fixed."""
+    seen = _capture(monkeypatch)
     ev = {"hook_event_name": "Stop", "session_id": "s1", "cwd": "/var/www/demo"}
     assert hook_notify.handle(ev, tmp_path, {"channels": {}}) == 0
-    assert seen
+    assert seen == []
+
+
+def test_idle_prompt_notification_is_forwarded(tmp_path, monkeypatch):
+    """CC's idle_prompt is the real "finished and waiting" signal."""
+    seen = _capture(monkeypatch)
+    ev = {"hook_event_name": "Notification", "session_id": "s1",
+          "notification_type": "idle_prompt",
+          "message": "Claude is waiting for your input"}
+    assert hook_notify.handle(ev, tmp_path, {"channels": {}}) == 0
+    assert [n.title for n in seen] == ["Claude 等你"]
+
+
+def test_unlisted_notification_types_are_dropped(tmp_path, monkeypatch):
+    seen = _capture(monkeypatch)
+    ev = {"hook_event_name": "Notification", "session_id": "s1",
+          "notification_type": "agent_completed", "message": "agent done"}
+    assert hook_notify.handle(ev, tmp_path, {"channels": {}}) == 0
+    assert seen == []
+
+
+def test_permission_prompt_notification_is_forwarded(tmp_path, monkeypatch):
+    seen = _capture(monkeypatch)
+    ev = {"hook_event_name": "Notification", "session_id": "s1",
+          "notification_type": "permission_prompt", "message": "needs approval"}
+    hook_notify.handle(ev, tmp_path, {"channels": {}})
+    assert [n.title for n in seen] == ["Claude 需要审批"]
+
+
+def test_duplicate_notifications_are_suppressed(tmp_path, monkeypatch):
+    seen = _capture(monkeypatch)
+    ev = {"hook_event_name": "Notification", "session_id": "s1",
+          "notification_type": "idle_prompt", "message": "waiting"}
+    hook_notify.handle(ev, tmp_path, {"channels": {}})
+    hook_notify.handle(ev, tmp_path, {"channels": {}})
+    assert len(seen) == 1
+
+
+def test_idle_prompt_is_suppressed_during_quiet_hours(tmp_path, monkeypatch):
+    import datetime
+
+    seen = _capture(monkeypatch)
+    now = datetime.datetime.now()
+    start = (now - datetime.timedelta(minutes=2)).strftime("%H:%M")
+    end = (now + datetime.timedelta(minutes=2)).strftime("%H:%M")
+    cfg = {"channels": {},
+           "quiet_hours": {"enabled": True, "start": start, "end": end}}
+    ev = {"hook_event_name": "Notification", "session_id": "s1",
+          "notification_type": "idle_prompt", "message": "waiting"}
+    hook_notify.handle(ev, tmp_path, cfg)
+    assert seen == []
+
+
+def test_permission_prompt_ignores_quiet_hours(tmp_path, monkeypatch):
+    import datetime
+
+    seen = _capture(monkeypatch)
+    now = datetime.datetime.now()
+    start = (now - datetime.timedelta(minutes=2)).strftime("%H:%M")
+    end = (now + datetime.timedelta(minutes=2)).strftime("%H:%M")
+    cfg = {"channels": {},
+           "quiet_hours": {"enabled": True, "start": start, "end": end}}
+    ev = {"hook_event_name": "Notification", "session_id": "s1",
+          "notification_type": "permission_prompt", "message": "approve?"}
+    hook_notify.handle(ev, tmp_path, cfg)
+    assert [n.title for n in seen] == ["Claude 需要审批"]
+
+
+def test_stop_failure_still_notifies(tmp_path, monkeypatch):
+    seen = _capture(monkeypatch)
+    ev = {"hook_event_name": "StopFailure", "session_id": "s1",
+          "error": "boom"}
+    hook_notify.handle(ev, tmp_path, {"channels": {}})
+    assert [n.title for n in seen] == ["Claude 失败"]
 
 
 def test_post_tool_use_clears_pending(tmp_path):
