@@ -92,6 +92,13 @@ def test_tick_writes_heartbeat(tmp_path):
     assert state.heartbeat_age(tmp_path, now=1234.0) == 0.0
 
 
+def test_tick_writes_identity_into_heartbeat(tmp_path):
+    daemon.tick(1234.5, tmp_path, _cfg(), _deps(),
+                pid=55, plugin_root="/p", version="0.2.0")
+    hb = state.read_heartbeat(tmp_path)
+    assert (hb["pid"], hb["plugin_root"], hb["version"]) == (55, "/p", "0.2.0")
+
+
 
 
 

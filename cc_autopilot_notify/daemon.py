@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import dataclasses
 import logging
+import os
 import time
 from pathlib import Path
 from typing import Callable
@@ -166,10 +167,12 @@ def _tick_one(pending: state.Pending, now: float, root: Path, cfg: dict,
     deps.notify(f"Auto-answered: option {choice}")
 
 
-def tick(now: float, root: Path, cfg: dict, deps: Deps) -> list[str]:
+def tick(now: float, root: Path, cfg: dict, deps: Deps, *, pid: int | None = None,
+         plugin_root: str | None = None, version: str | None = None) -> list[str]:
     """Run one iteration. Returns human-readable action lines."""
     root = Path(root)
-    state.write_heartbeat(root, when=now)
+    state.write_heartbeat(root, when=now, pid=pid,
+                          plugin_root=plugin_root, version=version)
     actions: list[str] = []
     for pending in state.load_all(root):
         _tick_one(pending, now, root, cfg, deps, actions)
@@ -204,12 +207,28 @@ def build_deps(appdata: Path, cfg: dict) -> Deps:
 
 def run(root: Path, cfg: dict, appdata: Path | None = None) -> None:
     """Loop forever. Used by the systemd unit."""
+    from . import daemon_control
+
+    root = Path(root)
+    lock = daemon_control.acquire_lock(root)
+    if lock is None:
+        log.warning("daemon: another instance holds the lock; exiting")
+        return
+    plugin_root = os.environ.get("CLAUDE_PLUGIN_ROOT") or str(
+        Path(__file__).resolve().parent.parent)
+    version = daemon_control.plugin_version(plugin_root)
     appdata = appdata or Path("/mnt/c/Users/Anonymous/AppData/Roaming")
     deps = build_deps(appdata, cfg)
+    ticks = 0
     while True:
         try:
-            for action in tick(time.time(), Path(root), cfg, deps):
+            for action in tick(time.time(), root, cfg, deps, pid=os.getpid(),
+                               plugin_root=plugin_root, version=version):
                 log.info("daemon: %s", action)
         except Exception:  # noqa: BLE001 - the daemon must outlive any one tick
             log.exception("daemon: tick raised")
+        ticks += 1
+        if ticks % 60 == 0 and not daemon_control.package_present(plugin_root):
+            log.warning("daemon: package root %s is gone; exiting", plugin_root)
+            return
         time.sleep(POLL_SECONDS)
