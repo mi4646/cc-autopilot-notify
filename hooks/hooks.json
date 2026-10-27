@@ -1,0 +1,39 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {"matcher": "AskUserQuestion", "hooks": [
+        {"type": "command", "timeout": 10,
+         "command": "python3 ${CLAUDE_PLUGIN_ROOT}/cc_autopilot_notify/run_hook.py pre_tool"}]}
+    ],
+    "PostToolUse": [
+      {"matcher": "AskUserQuestion", "hooks": [
+        {"type": "command", "timeout": 10,
+         "command": "python3 ${CLAUDE_PLUGIN_ROOT}/cc_autopilot_notify/run_hook.py notify"}]}
+    ],
+    "Notification": [
+      {"matcher": "*", "hooks": [
+        {"type": "command", "timeout": 10,
+         "command": "python3 ${CLAUDE_PLUGIN_ROOT}/cc_autopilot_notify/run_hook.py notify"}]}
+    ],
+    "Stop": [
+      {"matcher": "*", "hooks": [
+        {"type": "command", "timeout": 10,
+         "command": "python3 ${CLAUDE_PLUGIN_ROOT}/cc_autopilot_notify/run_hook.py notify"}]}
+    ],
+    "StopFailure": [
+      {"matcher": "*", "hooks": [
+        {"type": "command", "timeout": 10,
+         "command": "python3 ${CLAUDE_PLUGIN_ROOT}/cc_autopilot_notify/run_hook.py notify"}]}
+    ],
+    "PermissionRequest": [
+      {"matcher": "AskUserQuestion", "hooks": [
+        {"type": "command", "timeout": 180,
+         "command": "python3 ${CLAUDE_PLUGIN_ROOT}/cc_autopilot_notify/run_hook.py permission"}]}
+    ],
+    "SessionStart": [
+      {"matcher": "*", "hooks": [
+        {"type": "command", "timeout": 20,
+         "command": "bash ${CLAUDE_PLUGIN_ROOT}/scripts/ensure-daemon.sh"}]}
+    ]
+  }
+}

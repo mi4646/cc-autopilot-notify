@@ -1,0 +1,17 @@
+{
+  "name": "cc-autopilot-notify",
+  "owner": {"name": "mi4646"},
+  "metadata": {
+    "description": "Notifications and unattended auto-answer for Claude Code"
+  },
+  "plugins": [
+    {
+      "name": "cc-autopilot-notify",
+      "source": "./",
+      "description": "Feishu/terminal/toast notifications plus unattended auto-answer",
+      "version": "0.2.0",
+      "category": "productivity",
+      "tags": ["notification", "auto-answer", "hooks"]
+    }
+  ]
+}
