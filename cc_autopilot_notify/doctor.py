@@ -96,13 +96,8 @@ def _feishu(cfg: dict) -> Check:
     return Check("feishu webhook", "PASS", "configured (not probed)")
 
 
-def _settings_clean() -> Check:
-    """Report whether OUR hooks are installed.
-
-    Presence is the healthy state after install, so this is a positive check:
-    a plain substring search would also match an unrelated project path that
-    happens to contain the name.
-    """
+def _legacy_install() -> Check:
+    """FAIL while legacy settings.json hooks remain: they double-fire with the plugin."""
     import json
     import os
 
@@ -110,18 +105,17 @@ def _settings_clean() -> Check:
                 or Path.home() / ".claude" / "settings.json")
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-    except OSError as exc:
-        return Check("hooks installed", "SKIP", f"cannot read {path}: {exc}")
+    except OSError:
+        return Check("legacy install", "SKIP", f"cannot read {path}")
     except ValueError:
-        return Check("hooks installed", "FAIL", f"{path} is not valid JSON")
-
+        return Check("legacy install", "FAIL", f"{path} is not valid JSON")
     for items in (data.get("hooks") or {}).values():
         for item in items or []:
             for hook in item.get("hooks") or []:
                 if "run_hook.py" in str(hook.get("command", "")):
-                    return Check("hooks installed", "PASS",
-                                 "our hook is registered in settings.json")
-    return Check("hooks installed", "SKIP", "not installed yet")
+                    return Check("legacy install", "FAIL",
+                                 "legacy hooks in settings.json; run /cc-autopilot:migrate")
+    return Check("legacy install", "PASS", "no legacy entries in settings.json")
 
 
 def _answers_probe(spike_path: Path | None = None) -> Check:
@@ -166,6 +160,6 @@ def run_all(root: Path, cfg: dict, probe: Callable[[], dict] | None = None,
     checks.append(_powershell())
     checks.append(_heartbeat(Path(root), now))
     checks.append(_feishu(cfg))
-    checks.append(_settings_clean())
+    checks.append(_legacy_install())
     checks.append(_answers_probe())
     return checks

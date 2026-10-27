@@ -1,3 +1,4 @@
+import json
 import time
 
 from cc_autopilot_notify import doctor, hook_permission, state
@@ -87,3 +88,20 @@ def test_cc_version_survives_undecodable_output(monkeypatch):
         raise UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte")
     monkeypatch.setattr(subprocess, "run", bad)
     assert doctor._cc_version().status == "SKIP"
+
+
+def test_doctor_fails_when_legacy_hooks_remain(tmp_path, monkeypatch):
+    settings = tmp_path / "settings.json"
+    settings.write_text(json.dumps({"hooks": {"Stop": [
+        {"hooks": [{"command": "python3 /x/run_hook.py notify"}]}]}}))
+    monkeypatch.setenv("CC_AUTOPILOT_SETTINGS", str(settings))
+    checks = doctor.run_all(tmp_path, {"channels": {}}, probe=lambda: {})
+    assert {c.name: c for c in checks}["legacy install"].status == "FAIL"
+
+
+def test_doctor_passes_when_settings_have_no_legacy_hooks(tmp_path, monkeypatch):
+    settings = tmp_path / "settings.json"
+    settings.write_text(json.dumps({"hooks": {}}))
+    monkeypatch.setenv("CC_AUTOPILOT_SETTINGS", str(settings))
+    checks = doctor.run_all(tmp_path, {"channels": {}}, probe=lambda: {})
+    assert {c.name: c for c in checks}["legacy install"].status == "PASS"
