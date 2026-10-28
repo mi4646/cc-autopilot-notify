@@ -1,7 +1,41 @@
 import json
 import time
 
+import pytest
+
 from cc_autopilot_notify import doctor, hook_permission, state
+from cc_autopilot_notify.presence import Presence
+
+
+@pytest.fixture(autouse=True)
+def _stub_presence(monkeypatch):
+    """Doctor tests must never launch a real PowerShell process."""
+    from cc_autopilot_notify import presence
+    monkeypatch.setattr(
+        presence, "sample", lambda: Presence(True, 1000.0))
+
+
+def test_doctor_reports_presence_pass_with_idle(tmp_path):
+    checks = doctor.run_all(
+        tmp_path, {"channels": {}}, probe=lambda: {},
+        presence_fn=lambda: Presence(True, 12.3))
+    check = {c.name: c for c in checks}["powershell presence"]
+    assert check.status == "PASS"
+    assert "idle=12" in check.detail
+
+
+def test_doctor_reports_presence_fail_when_unreadable(tmp_path):
+    checks = doctor.run_all(
+        tmp_path, {"channels": {}}, probe=lambda: {},
+        presence_fn=lambda: None)
+    assert {c.name: c for c in checks}["powershell presence"].status == "FAIL"
+
+
+def test_doctor_reports_presence_fail_when_idle_missing(tmp_path):
+    checks = doctor.run_all(
+        tmp_path, {"channels": {}}, probe=lambda: {},
+        presence_fn=lambda: Presence(True, None))
+    assert {c.name: c for c in checks}["powershell presence"].status == "FAIL"
 
 
 def _auq():

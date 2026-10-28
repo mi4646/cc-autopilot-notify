@@ -20,8 +20,10 @@ Three tiers, each covering the one above it failing:
 Path A leaves the dialog on screen the whole time, so you can answer yourself
 and win. Path B blocks the dialog, which is why it is off unless you ask for it.
 
-Idle thresholds: **150 s** while the terminal is focused, **90 s** otherwise.
-Touching the dialog resets the timer.
+Idle thresholds: a question is answered only after the **system** has had no
+keyboard or mouse input for **150 s** while Pebrel is the foreground window,
+or **90 s** otherwise. Touching the dialog resets the timer immediately;
+typing in another window keeps system idle at zero, so the timer does not run.
 
 ### Notification policy
 

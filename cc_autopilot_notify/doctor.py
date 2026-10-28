@@ -70,13 +70,14 @@ def _runtime(probe) -> list[Check]:
     ]
 
 
-def _powershell() -> Check:
-    from . import presence
-
-    value = presence.is_foreground()
-    if value is None:
-        return Check("powershell foreground", "FAIL", "cannot read the foreground window")
-    return Check("powershell foreground", "PASS", f"foreground={value}")
+def _powershell_presence(sample_fn) -> Check:
+    got = sample_fn()
+    if got is None or got.idle_seconds is None:
+        return Check("powershell presence", "FAIL",
+                     "cannot read the foreground window or system idle time")
+    foreground = "unknown" if got.foreground is None else str(got.foreground).lower()
+    return Check("powershell presence", "PASS",
+                 f"foreground={foreground} idle={got.idle_seconds:.0f}s")
 
 
 def _heartbeat(root: Path, now: float) -> Check:
@@ -154,13 +155,16 @@ def _answers_probe(spike_path: Path | None = None) -> Check:
 
 
 def run_all(root: Path, cfg: dict, probe: Callable[[], dict] | None = None,
-            now: float | None = None) -> list[Check]:
+            now: float | None = None,
+            presence_fn: Callable[[], object] | None = None) -> list[Check]:
+    from . import presence
+
     now = time.time() if now is None else now
     probe = probe or (lambda: pebrel_runtime.describe(
         Path(cfg.get("_appdata") or DEFAULT_APPDATA)))
     checks = [_cc_version()]
     checks.extend(_runtime(probe))
-    checks.append(_powershell())
+    checks.append(_powershell_presence(presence_fn or presence.sample))
     checks.append(_heartbeat(Path(root), now))
     checks.append(_feishu(cfg))
     checks.append(_legacy_install())

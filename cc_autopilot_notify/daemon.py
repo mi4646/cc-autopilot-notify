@@ -42,17 +42,74 @@ ANSWER_STEP_SECONDS = 0.3
 MAX_ANSWER_STEPS = 12
 MAX_STALLS = 2
 
+# One PowerShell sample covers foreground + idle and costs ~0.5-0.9s. The
+# idle threshold is measured in tens of seconds, so a 5s cache loses nothing.
+IDLE_SAMPLE_INTERVAL_SECONDS = 5.0
+FAILURE_BACKOFF_SECONDS = 5.0
+OUTAGE_ALERT_SECONDS = 60.0
+OUTAGE_MESSAGE = ("空闲探测失败，自动应答已停摆。"
+                  "运行 cc-autopilot-notify doctor 检查 PowerShell。")
+RECOVERY_MESSAGE = "空闲探测已恢复，自动应答重新生效。"
+
 
 @dataclasses.dataclass
 class Deps:
     read: Callable[[state.Pending], dict]
     press: Callable[[state.Pending, str, int], dict]        # (pending, key, repeat)
-    foreground: Callable[[], bool | None]
+    sample: Callable[[], "presence.Presence | None"]
     judge_fn: Callable[[dict], int]
     notify: Callable[[str], None]
     locate: Callable[[str], "tuple[int, int] | None"] = lambda sid: None
     judge_multi_fn: Callable[[dict], "tuple[int, ...]"] = lambda q: (0,)
     sleep: Callable[[float], None] = time.sleep
+
+
+@dataclasses.dataclass
+class PresenceGate:
+    """Cache a successful sample for 5s; back off 5s after a failure.
+
+    The cache exists because one sample costs ~0.7s and the loops runs every
+    second. A failure stops auto-answering and, after 60s, tells the user
+    once. Recovery is announced only if an outage was announced first.
+    """
+    last_at: float | None = None
+    last_presence: "presence.Presence | None" = None
+    fail_since: float | None = None
+    backoff_until: float = 0.0
+    notified: bool = False
+
+    def get(self, now: float, deps: Deps) -> "presence.Presence | None":
+        if now < self.backoff_until:
+            return None
+        if (self.last_presence is not None and self.last_at is not None
+                and now - self.last_at < IDLE_SAMPLE_INTERVAL_SECONDS):
+            return self.last_presence
+
+        presence = deps.sample()
+        if presence is None or presence.idle_seconds is None:
+            if self.fail_since is None:
+                self.fail_since = now
+            elif not self.notified and now - self.fail_since >= OUTAGE_ALERT_SECONDS:
+                deps.notify(OUTAGE_MESSAGE)
+                self.notified = True
+            self.backoff_until = now + FAILURE_BACKOFF_SECONDS
+            self.last_presence = None
+            self.last_at = now
+            return None
+
+        if self.notified:
+            deps.notify(RECOVERY_MESSAGE)
+        self.fail_since = None
+        self.notified = False
+        self.backoff_until = 0.0
+        self.last_at = now
+        self.last_presence = presence
+        return presence
+
+    def invalidate(self) -> None:
+        """Drop the cache after a press: our own input reset system idle."""
+        self.last_at = None
+        self.last_presence = None
 
 
 class _PressRefused(Exception):
@@ -61,10 +118,6 @@ class _PressRefused(Exception):
 
 class _JudgeFailed(Exception):
     pass
-
-
-def should_fire(pending: state.Pending, now: float, threshold: float) -> bool:
-    return (now - pending.last_activity) >= threshold
 
 
 def _press_or_raise(pending: state.Pending, key: str, repeat: int,
@@ -167,16 +220,17 @@ def _give_up(sid: str, root: Path, deps: "Deps", message: str) -> None:
     deps.notify(message)
 
 
-def _threshold(cfg: dict, foreground: bool | None) -> int:
-    # Unknown counts as background: answering sooner is the safe direction,
-    # because the alternative is a session stalled until morning.
-    if foreground is True:
+def _threshold(cfg: dict, presence_now: "presence.Presence") -> int:
+    # Unknown foreground counts as background. It still requires the system
+    # idle threshold, so a user who is typing is never answered early.
+    if presence_now.foreground is True:
         return config.foreground_seconds(cfg)
     return config.background_seconds(cfg)
 
 
 def _tick_one(pending: state.Pending, now: float, root: Path, cfg: dict,
-              deps: Deps, actions: list[str]) -> None:
+              deps: Deps, actions: list[str], gate: PresenceGate,
+              answered: list[bool]) -> None:
     sid = pending.session_id
 
     # The hook records PEBREL_PANE_ID directly. Only fall back to Pebrel's own
@@ -227,13 +281,18 @@ def _tick_one(pending: state.Pending, now: float, root: Path, cfg: dict,
         state.touch(sid, root, when=now, revision=revision)
         return
 
-    threshold = _threshold(cfg, deps.foreground())
-    if not should_fire(pending, now, threshold):
+    presence_now = gate.get(now, deps)
+    if presence_now is None or presence_now.idle_seconds is None:
+        return
+    if presence_now.idle_seconds < _threshold(cfg, presence_now):
+        return
+    if now - pending.appeared_at < int(cfg.get("min_duration_seconds", 30)):
         return
 
     # Answer every question in the panel, then confirm the review if one is
     # shown. The revision stored is the one read after the last keypress, so
     # the next tick does not mistake our own presses for user activity.
+    answered[0] = True
     try:
         reading, chosen = _answer_sequence(pending, reading, deps)
     except screen.ScreenMismatch as exc:
@@ -264,14 +323,24 @@ def _tick_one(pending: state.Pending, now: float, root: Path, cfg: dict,
 
 
 def tick(now: float, root: Path, cfg: dict, deps: Deps, *, pid: int | None = None,
-         plugin_root: str | None = None, version: str | None = None) -> list[str]:
+         plugin_root: str | None = None, version: str | None = None,
+         gate: PresenceGate | None = None) -> list[str]:
     """Run one iteration. Returns human-readable action lines."""
     root = Path(root)
     state.write_heartbeat(root, when=now, pid=pid,
                           plugin_root=plugin_root, version=version)
     actions: list[str] = []
-    for pending in state.load_all(root):
-        _tick_one(pending, now, root, cfg, deps, actions)
+    pendings = state.load_all(root)
+    if not pendings:
+        return actions
+    gate = gate if gate is not None else PresenceGate()
+    answered = [False]
+    for pending in pendings:
+        _tick_one(pending, now, root, cfg, deps, actions, gate, answered)
+    if answered[0]:
+        # Our own keypresses reset system idle; never reuse the sample taken
+        # before those presses for the next tick.
+        gate.invalidate()
     return actions
 
 
@@ -300,7 +369,7 @@ def build_deps(appdata: Path, cfg: dict) -> Deps:
                                                 body=message), cfg)
 
     return Deps(read=do_read, press=do_press,
-                foreground=presence.is_foreground,
+                sample=presence.sample,
                 judge_fn=do_judge, judge_multi_fn=do_judge_multi,
                 notify=do_notify, locate=do_locate)
 
@@ -319,11 +388,13 @@ def run(root: Path, cfg: dict, appdata: Path | None = None) -> None:
     version = daemon_control.plugin_version(plugin_root)
     appdata = appdata or Path("/mnt/c/Users/Anonymous/AppData/Roaming")
     deps = build_deps(appdata, cfg)
+    gate = PresenceGate()
     ticks = 0
     while True:
         try:
             for action in tick(time.time(), root, cfg, deps, pid=os.getpid(),
-                               plugin_root=plugin_root, version=version):
+                               plugin_root=plugin_root, version=version,
+                               gate=gate):
                 log.info("daemon: %s", action)
         except Exception:  # noqa: BLE001 - the daemon must outlive any one tick
             log.exception("daemon: tick raised")

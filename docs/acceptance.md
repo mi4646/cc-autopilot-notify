@@ -187,3 +187,32 @@ Code settings, start the daemon, and ask one real question.
 - doctor：`feishu webhook: configured`、daemon 心跳 PASS。直装写入 settings.json
   的 hooks 在插件版的 `legacy install` 检查中会显示为 legacy，需运行
   `/cc-autopilot-notify:migrate`。
+
+## 2026-10-28: 系统空闲阈值（0.2.2）
+
+逻辑变更：自动应答不再以「面板 revision 多久没变」单独计时，而是要求
+**Windows 系统空闲**达到阈值：
+
+- Pebrel 是前台窗口 → `idle ≥ 150 s`
+- Pebrel 不是前台或未知 → `idle ≥ 90 s`
+- 面板 revision 变化 → 立即取消本轮
+- 问题出现不足 `min_duration_seconds`（30 s）→ 不答
+- 探测失败 → 不答；连续失败 60 s 发一条告警，恢复后发一条恢复通知
+
+探测由 `presence.sample()` 一次 PowerShell 调用同时取回前台归属与空闲秒数，
+成功结果缓存 5 s。spike 见 `docs/spikes/2026-10-28-getlastinputinfo-wsl.md`。
+
+单元覆盖（`python -m pytest tests/ -q`，211 passed）：
+
+- `test_presence.py::test_sample_*` — 解析、ERR、越界、超时、单次调用
+- `test_daemon.py::test_foreground_idle_*` / `::test_background_idle_*` — 150/90 边界
+- `::test_unknown_foreground_uses_background_threshold`、`::test_unknown_idle_never_fires`
+- `::test_min_duration_blocks_a_fresh_question`、`::test_batch_answers_every_pending_in_one_tick`
+- `::test_own_press_resets_the_next_window`
+- `::test_shared_gate_resamples_after_an_answer` — 应答后缓存失效，不会重复答
+- `::test_gate_*` — 5 s 缓存、失败退避、60 s 告警、恢复通知
+- `test_doctor.py::test_doctor_reports_presence_*`
+
+**实机验收：未运行。** 需要部署 0.2.2、重启 daemon，并用真实
+`AskUserQuestion` 分别验证「人在电脑前不答」「离开 150/90 秒后答」
+「锁屏时 `pane.send_key` 仍能按下」。在这三项跑完之前，不能把本节当作通过。

@@ -1,16 +1,27 @@
 from cc_autopilot_notify import daemon, state
+from cc_autopilot_notify.presence import Presence
 
 
-def _deps(revision="r1", foreground=True, choose_result=None, judge_index=1,
-          choose_calls=None, prompt_id="p" * 64, epoch=1, options=None,
-          locate=(1, 2), multi_indices=(0,), sleep=None):
+def _deps(revision="r1", foreground=True, idle_seconds=1000.0, choose_result=None,
+          judge_index=1, choose_calls=None, prompt_id="p" * 64, epoch=1,
+          options=None, locate=(1, 2), multi_indices=(0,), sleep=None,
+          sample_seq=None, sample_calls=None):
     calls = choose_calls if choose_calls is not None else []
+    seen = sample_calls if sample_calls is not None else []
+    seq = list(sample_seq) if sample_seq is not None else None
     opts = options if options is not None else [{"label": "A"}, {"label": "B"}]
+
+    def do_sample():
+        seen.append(1)
+        if seq is not None:
+            return seq.pop(0)
+        return Presence(foreground=foreground, idle_seconds=idle_seconds)
+
     return daemon.Deps(
         read=lambda p: {"revision": revision,
                         "prompt": {"prompt_id": prompt_id, "options": opts},
                         "identity": {"epoch": epoch}},
-        foreground=lambda: foreground,
+        sample=do_sample,
         judge_fn=lambda q: judge_index,
         notify=lambda msg: None,
         locate=lambda sid: locate,
@@ -18,6 +29,14 @@ def _deps(revision="r1", foreground=True, choose_result=None, judge_index=1,
         judge_multi_fn=lambda q: multi_indices,
         sleep=sleep or (lambda seconds: None),
     )
+
+
+def _attention_deps(keys, **kwargs):
+    deps = _deps(**kwargs)
+    deps.read = lambda p: {"state": "attention",
+                           "text": "  ❯ 1. A\n  2. B\n", "revision": "r1"}
+    deps.press = lambda p, key, repeat: keys.append((p.session_id, key, repeat)) or {"ok": True}
+    return deps
 
 
 def _seed(tmp_path, appeared, last_activity=None):
@@ -309,3 +328,172 @@ def test_stalled_panel_advances_with_tab(tmp_path):
     ], keys)
     daemon.tick(1000.0 + 150, tmp_path, _cfg(), deps)
     assert keys == [("enter", 1), ("tab", 1), ("enter", 1), ("enter", 1)], keys
+
+
+# --- system-idle thresholds -------------------------------------------------
+
+def test_foreground_idle_below_threshold_does_not_fire(tmp_path):
+    _seed(tmp_path, appeared=1000.0)
+    keys = []
+    daemon.tick(1000.0 + 150, tmp_path, _cfg(),
+                _attention_deps(keys, foreground=True, idle_seconds=149.0))
+    assert keys == []
+
+
+def test_foreground_idle_at_threshold_fires(tmp_path):
+    _seed(tmp_path, appeared=1000.0)
+    keys = []
+    daemon.tick(1000.0 + 150, tmp_path, _cfg(),
+                _attention_deps(keys, foreground=True, idle_seconds=150.0))
+    assert keys == [("s1", "down", 1), ("s1", "enter", 1)]
+
+
+def test_background_idle_below_threshold_does_not_fire(tmp_path):
+    _seed(tmp_path, appeared=1000.0)
+    keys = []
+    daemon.tick(1000.0 + 90, tmp_path, _cfg(),
+                _attention_deps(keys, foreground=False, idle_seconds=89.0))
+    assert keys == []
+
+
+def test_background_idle_at_threshold_fires(tmp_path):
+    _seed(tmp_path, appeared=1000.0)
+    keys = []
+    daemon.tick(1000.0 + 90, tmp_path, _cfg(),
+                _attention_deps(keys, foreground=False, idle_seconds=90.0))
+    assert keys == [("s1", "down", 1), ("s1", "enter", 1)]
+
+
+def test_unknown_foreground_uses_background_threshold(tmp_path):
+    _seed(tmp_path, appeared=1000.0)
+    keys = []
+    daemon.tick(1000.0 + 90, tmp_path, _cfg(),
+                _attention_deps(keys, foreground=None, idle_seconds=90.0))
+    assert keys == [("s1", "down", 1), ("s1", "enter", 1)]
+
+
+def test_unknown_idle_never_fires(tmp_path):
+    _seed(tmp_path, appeared=1000.0)
+    keys = []
+    daemon.tick(1000.0 + 500, tmp_path, _cfg(),
+                _attention_deps(keys, idle_seconds=None))
+    assert keys == []
+
+
+def test_min_duration_blocks_a_fresh_question(tmp_path):
+    _seed(tmp_path, appeared=1000.0)
+    keys = []
+    deps = _attention_deps(keys, idle_seconds=1000.0)
+    daemon.tick(1000.0 + 10, tmp_path, _cfg(), deps)
+    assert keys == []
+    daemon.tick(1000.0 + 30, tmp_path, _cfg(), deps)
+    assert keys == [("s1", "down", 1), ("s1", "enter", 1)]
+
+
+def test_no_pending_means_no_presence_call(tmp_path):
+    calls = []
+    daemon.tick(1234.0, tmp_path, _cfg(), _deps(sample_calls=calls))
+    assert calls == []
+
+
+def _seed_as(tmp_path, sid, appeared=1000.0):
+    state.record(state.Pending(
+        session_id=sid, window_id=1, pane_id=2,
+        questions=[{"question": "Q", "options": [{"label": "A"}, {"label": "B"}]}],
+        appeared_at=appeared, last_activity=appeared), tmp_path)
+
+
+def test_batch_answers_every_pending_in_one_tick(tmp_path):
+    for sid in ("s1", "s2", "s3"):
+        _seed_as(tmp_path, sid)
+    keys = []
+    daemon.tick(1000.0 + 150, tmp_path, _cfg(), _attention_deps(keys))
+    assert {sid for sid, _key, _n in keys} == {"s1", "s2", "s3"}
+    assert len(keys) == 6
+
+
+def test_own_press_resets_the_next_window(tmp_path):
+    _seed_as(tmp_path, "s1")
+    keys = []
+    deps = _attention_deps(keys, sample_seq=[
+        Presence(True, 1000.0), Presence(True, 1.0)])
+    daemon.tick(1000.0 + 150, tmp_path, _cfg(), deps)
+    assert len(keys) == 2, "first pending must be answered"
+    _seed_as(tmp_path, "s2")
+    daemon.tick(1000.0 + 152, tmp_path, _cfg(), deps)
+    assert len(keys) == 2, "idle was reset by our own press; nothing else may fire"
+
+
+def test_shared_gate_resamples_after_an_answer(tmp_path):
+    """A cached pre-press sample must not answer the same pending again."""
+    _seed_as(tmp_path, "s1")
+    keys = []
+    calls = []
+    deps = _attention_deps(keys, sample_calls=calls, sample_seq=[
+        Presence(True, 1000.0), Presence(True, 1.0)])
+    gate = daemon.PresenceGate()
+    daemon.tick(1000.0 + 150, tmp_path, _cfg(), deps, gate=gate)
+    assert len(keys) == 2
+    daemon.tick(1000.0 + 151, tmp_path, _cfg(), deps, gate=gate)
+    assert calls == [1, 1], "a press must invalidate the cached sample"
+    assert len(keys) == 2, "the stale high-idle sample must not fire again"
+
+
+# --- PresenceGate -----------------------------------------------------------
+
+class _GateDeps:
+    def __init__(self, results):
+        self.results = list(results)
+        self.calls = 0
+        self.notes = []
+
+    def sample(self):
+        self.calls += 1
+        return self.results.pop(0) if self.results else None
+
+    def notify(self, msg):
+        self.notes.append(msg)
+
+
+def test_gate_caches_a_successful_sample_for_five_seconds():
+    gate = daemon.PresenceGate()
+    presence = Presence(True, 1000.0)
+    deps = _GateDeps([presence, presence])
+    assert gate.get(1000.0, deps) is presence
+    assert gate.get(1002.0, deps) is presence
+    assert deps.calls == 1
+    assert gate.get(1006.0, deps) is presence
+    assert deps.calls == 2
+
+
+def test_gate_backs_off_five_seconds_after_failure():
+    gate = daemon.PresenceGate()
+    deps = _GateDeps([None, Presence(True, 1.0)])
+    assert gate.get(1000.0, deps) is None
+    assert gate.get(1002.0, deps) is None
+    assert deps.calls == 1, "backoff must suppress the second probe"
+    assert gate.get(1006.0, deps) == Presence(True, 1.0)
+    assert deps.calls == 2
+
+
+def test_gate_warns_once_after_sixty_seconds_of_failure():
+    gate = daemon.PresenceGate()
+    deps = _GateDeps([None] * 20)
+    for now in range(1000, 1061, 6):
+        assert gate.get(float(now), deps) is None
+    assert deps.notes == [daemon.OUTAGE_MESSAGE]
+
+
+def test_gate_sends_recovery_only_after_a_warned_outage():
+    gate = daemon.PresenceGate()
+    deps = _GateDeps([None, Presence(True, 1.0)])
+    gate.get(1000.0, deps)
+    gate.get(1006.0, deps)
+    assert deps.notes == [], "a short blip must not produce two notifications"
+
+    gate = daemon.PresenceGate()
+    deps = _GateDeps([None] * 11 + [Presence(True, 1.0)])
+    for now in range(1000, 1061, 6):
+        gate.get(float(now), deps)
+    gate.get(1066.0, deps)
+    assert deps.notes == [daemon.OUTAGE_MESSAGE, daemon.RECOVERY_MESSAGE]

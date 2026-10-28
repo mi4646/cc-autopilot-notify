@@ -5,6 +5,9 @@
 - 作者：Claude（调研 + 设计）
 - 目标仓库：`/var/www/cc-autopilot-notify`（新建，独立仓库）
 
+> **2026-10-28 更新**：§1.1 第 2 条、§1.2 的 S4/S5、§5 的 `thresholds` 语义已被
+> `2026-10-28-idle-aware-autoanswer-design.md` 取代。这几节只作为历史记录，不要照它们实现自动应答阈值。
+
 ---
 
 ## 1. 背景与问题
