@@ -216,3 +216,17 @@ Code settings, start the daemon, and ask one real question.
 **实机验收：未运行。** 需要部署 0.2.2、重启 daemon，并用真实
 `AskUserQuestion` 分别验证「人在电脑前不答」「离开 150/90 秒后答」
 「锁屏时 `pane.send_key` 仍能按下」。在这三项跑完之前，不能把本节当作通过。
+
+### 部署记录（已核对）
+
+| 项 | 证据 |
+|---|---|
+| 提交 | `0cad1f9 feat: gate auto-answer on system idle`，已推送 `master` |
+| 测试 | `python -m pytest tests/ -q` → **212 passed** |
+| 插件 | `claude plugin list` → `cc-autopilot-notify@cc-autopilot-notify` **0.2.2** |
+| 缓存 | `~/.claude/plugins/cache/cc-autopilot-notify/cc-autopilot-notify/0.2.2/` |
+| daemon | pid `504363`，心跳 `version=0.2.2`、`plugin_root=.../0.2.2` |
+| doctor | `powershell presence: PASS foreground=false idle=0s`；`daemon heartbeat: PASS` |
+| 配置 | `foreground_seconds=150`、`background_seconds=90`，运行时读值一致 |
+
+部署完成不等于验收通过：上面三项实机场景仍未运行。
