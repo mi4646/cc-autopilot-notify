@@ -236,6 +236,18 @@ Code settings, start the daemon, and ask one real question.
 - **判定**：人在电脑前操作时，自动应答没有触发。
 - **残留限制**：没有在问题存续期间连续采样 `idle` 曲线；以「操作约定 + 测试结束时的即时采样 + 日志无应答」为依据。工具超时是因为没有手动选 B，不是失败。
 
+### 2026-10-28 前台 150 秒档（0.2.4）：通过（分支证明）
+
+- **操作**：发出测试问题，不锁屏、不切窗口、不碰键鼠。
+- **日志**：
+  `2026-10-28 17:59:17 INFO daemon: … answering idle=318.7s foreground=True threshold=150s`
+  `2026-10-28 17:59:18 INFO daemon: … auto-answered option 0`
+- **证明**：前台分支选择了 **150 秒**阈值（不是后台 90 秒）。
+- **注意**：题目出现时 `idle` 已经是 318.7 秒，150 秒条件早已满足；实际等待的是
+  `min_duration_seconds=30`，所以约 37 秒后就答了。这是预期行为。
+- **未覆盖**：空闲从 0 开始、恰好等满 150 秒的完整曲线。149/150 边界由
+  `tests/test_daemon.py::test_foreground_threshold_boundary` 锁定。
+
 ### 部署记录（已核对）
 
 | 项 | 证据 |
