@@ -195,7 +195,7 @@ Code settings, start the daemon, and ask one real question.
 
 - Pebrel 是前台窗口 → `idle ≥ 150 s`
 - Pebrel 不是前台或未知 → `idle ≥ 90 s`
-- 面板 revision 变化 → 立即取消本轮
+- 面板 revision 变化不再作为取消条件；**任何真实键鼠输入**会让系统空闲归零，从而立即取消本轮
 - 问题出现不足 `min_duration_seconds`（30 s）→ 不答
 - 探测失败 → 不答；连续失败 60 s 发一条告警，恢复后发一条恢复通知
 
@@ -230,3 +230,15 @@ Code settings, start the daemon, and ask one real question.
 | 配置 | `foreground_seconds=150`、`background_seconds=90`，运行时读值一致 |
 
 部署完成不等于验收通过：上面三项实机场景仍未运行。
+
+### 2026-10-28 锁屏实测第 1 次：失败（已定位并修复）
+
+- **操作**：发出一个测试用 `AskUserQuestion`，锁屏等待 90 秒以上。
+- **结果**：300 秒后工具超时，面板没有被自动应答。
+- **日志**：`daemon.log` 每秒一条
+  `4892ef03-…: user is interacting; timer reset`，从未进入空闲判定。
+- **原因**：面板底部的状态行/计时每秒自行重绘，`pane.read` 的 60 行文本
+  sha256 每秒变化；旧的 revision 门控把它误判为「用户正在操作」。
+- **修复**：删除 revision 硬门控；真实交互由系统空闲判定（按键/鼠标立即归零）。
+  新增回归测试 `tests/test_daemon.py::test_panel_redraw_alone_does_not_block`。
+- **状态**：待重新部署后重测。第一次实测不能算通过。

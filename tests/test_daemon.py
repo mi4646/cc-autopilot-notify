@@ -89,20 +89,20 @@ def test_undeterminable_foreground_uses_background_threshold(tmp_path):
     assert keys, "unknown presence must fall to the background threshold"
 
 
-def test_revision_change_resets_activity(tmp_path):
-    """A revision change means the user is interacting: no fire, timer moves."""
+def test_panel_redraw_alone_does_not_block(tmp_path):
+    """The footer/status line can redraw every second; that is not user input.
+
+    System idle is the authoritative signal. A changing revision alone must
+    not stop an answer while the user is away.
+    """
     _seed(tmp_path, appeared=1000.0)
     state.touch("s1", tmp_path, when=1000.0, revision="r1")
     keys = []
-    deps = _deps(foreground=True)
+    deps = _attention_deps(keys, idle_seconds=1000.0)
     deps.read = lambda p: {"state": "attention",
                            "text": "  ❯ 1. A\n  2. B\n", "revision": "r2"}
-    deps.press = lambda p, key, repeat: keys.append((key, repeat)) or {"ok": True}
     daemon.tick(1000.0 + 200, tmp_path, _cfg(), deps)
-    got = state.load_all(tmp_path)[0]
-    assert keys == [], "must not answer while the user is interacting"
-    assert got.last_activity == 1200.0
-    assert got.revision == "r2"
+    assert keys == [("s1", "down", 1), ("s1", "enter", 1)]
 
 
 

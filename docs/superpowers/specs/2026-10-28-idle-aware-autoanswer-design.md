@@ -142,12 +142,13 @@ def _threshold(cfg, presence):
 
 ```
 1. 面板 state == "attention"                     （保留，daemon.py:222）
-2. revision 与记录一致，或首次观测                （保留，daemon.py:225-231）
-3. sample 为 None 或 idle_seconds 为 None        → 不动（进入退避/告警状态机）
-4. idle < _threshold(cfg, sample)                → 不动（前台 150 / 后台 90）
-5. now - pending.appeared_at ≥ min_duration_seconds
-6. 执行 _answer_sequence，应答后 touch
+2. sample 为 None 或 idle_seconds 为 None        → 不动（进入退避/告警状态机）
+3. idle < _threshold(cfg, sample)                → 不动（前台 150 / 后台 90）
+4. now - pending.appeared_at ≥ min_duration_seconds
+5. 执行 _answer_sequence，应答后 touch
 ```
+
+**没有 revision 门控。** 面板底部的状态行/计时可以每秒自行重绘，让 60 行文本的哈希每秒变化；2026-10-28 的实机测试正是因此每次都判成「user is interacting」，永远走不到空闲判定。真实交互由系统空闲反映：按任何键或动鼠标，`idle` 立刻归零。因此 revision 只作为应答后的记录，不再作为取消条件。
 
 `background_seconds` 重新启用：`foreground is True` 用前台 150 秒，`False` 与 `None` 用后台 90 秒。`_threshold()` 保留并复用。
 
@@ -215,6 +216,7 @@ def _threshold(cfg, presence):
 | `test_presence.test_idle_out_of_range_is_none` | 秒数 > 604800 → `idle_seconds is None` |
 | `test_presence.test_sample_timeout_is_none` | 超时 → `sample()` 返回 `None` |
 | `test_presence.test_uses_invariant_culture` | 断言脚本包含 `InvariantCulture`，防止区域设置回归 |
+| `test_daemon.test_panel_redraw_alone_does_not_block` | 面板文本每秒自绘但系统空闲足够 → 仍然应答 |
 | `test_daemon.test_foreground_threshold_boundary` | `foreground=True`：`idle=149` 不答，`150` 答 |
 | `test_daemon.test_background_threshold_boundary` | `foreground=False`：`idle=89` 不答，`90` 答 |
 | `test_daemon.test_unknown_foreground_uses_background` | `foreground=None`、`idle=90` → 答 |
@@ -335,8 +337,9 @@ CODE PATHS                                          USER FLOWS
   ├── [GAP] 其他进程 / 空名 → False / None           [+] 离开 ≥150s(前台) / ≥90s(后台) → 应答 [GAP]
   └── [GAP] ERR / 越界 / 超时 → None                 [+] 应答后下一题 → 再等一档 [GAP]
 [+] daemon._tick_one()                               [+] PowerShell 故障 → 停摆 + 60s 告警 [GAP]
-  ├── [★★ TESTED] attention 门控 / revision 基线 — test_daemon.py
+  ├── [★★ TESTED] attention 门控 — test_daemon.py
   ├── [GAP] 惰性探测 / 缓存 5 秒 / 无 pending 零次
+  ├── [GAP] 面板自绘不阻止应答（无 revision 门控）
   ├── [GAP] 前台 150 / 后台 90 的阈值选择
   ├── [GAP] 失败退避 + 告警 + 恢复
   └── [GAP] min_duration 门控

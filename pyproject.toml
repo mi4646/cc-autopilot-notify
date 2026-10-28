@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cc-autopilot-notify"
-version = "0.2.2"
+version = "0.2.3"
 description = "Notifications and unattended auto-answer for Claude Code"
 requires-python = ">=3.11"
 license = { text = "MIT" }

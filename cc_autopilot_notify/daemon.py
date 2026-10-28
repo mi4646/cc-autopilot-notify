@@ -272,14 +272,10 @@ def _tick_one(pending: state.Pending, now: float, root: Path, cfg: dict,
     if reading.get("state") != "attention":
         return
 
-    revision = reading.get("revision")
-    if pending.revision is None:
-        # First observation: establish the baseline, do not treat it as movement.
-        state.touch(sid, root, when=pending.last_activity, revision=revision)
-    elif revision is not None and revision != pending.revision:
-        actions.append(f"{sid}: user is interacting; timer reset")
-        state.touch(sid, root, when=now, revision=revision)
-        return
+    # No revision gate here. The pane's status line can redraw every second
+    # (timer/spinner), which changes the 60-line tail without any user input.
+    # System idle is the authoritative "is the user here" signal: any real
+    # keypress or mouse movement resets it to zero.
 
     presence_now = gate.get(now, deps)
     if presence_now is None or presence_now.idle_seconds is None:
