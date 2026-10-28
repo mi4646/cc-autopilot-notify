@@ -364,6 +364,21 @@ def test_background_idle_at_threshold_fires(tmp_path):
     assert keys == [("s1", "down", 1), ("s1", "enter", 1)]
 
 
+def test_answer_logs_idle_foreground_and_threshold(tmp_path, caplog):
+    """The answer log must say which threshold was actually used."""
+    import logging
+
+    _seed(tmp_path, appeared=1000.0)
+    keys = []
+    deps = _attention_deps(keys, foreground=True, idle_seconds=150.0)
+    with caplog.at_level(logging.INFO, logger="cc_autopilot_notify.daemon"):
+        daemon.tick(1000.0 + 150, tmp_path, _cfg(), deps)
+    assert keys
+    assert "idle=150.0s" in caplog.text
+    assert "foreground=True" in caplog.text
+    assert "threshold=150s" in caplog.text
+
+
 def test_unknown_foreground_uses_background_threshold(tmp_path):
     _seed(tmp_path, appeared=1000.0)
     keys = []

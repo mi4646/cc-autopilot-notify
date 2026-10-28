@@ -280,10 +280,13 @@ def _tick_one(pending: state.Pending, now: float, root: Path, cfg: dict,
     presence_now = gate.get(now, deps)
     if presence_now is None or presence_now.idle_seconds is None:
         return
-    if presence_now.idle_seconds < _threshold(cfg, presence_now):
+    threshold = _threshold(cfg, presence_now)
+    if presence_now.idle_seconds < threshold:
         return
     if now - pending.appeared_at < int(cfg.get("min_duration_seconds", 30)):
         return
+    log.info("daemon: %s: answering idle=%.1fs foreground=%s threshold=%ss",
+             sid, presence_now.idle_seconds, presence_now.foreground, threshold)
 
     # Answer every question in the panel, then confirm the review if one is
     # shown. The revision stored is the one read after the last keypress, so
