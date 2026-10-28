@@ -70,3 +70,36 @@ def test_empty_options_raises():
     except ValueError:
         return
     raise AssertionError("expected ValueError")
+
+
+def test_pick_many_selects_every_marked_option():
+    q = _q([{"label": "A (Recommended)"}, {"label": "B"},
+            {"label": "C (Recommended)"}])
+    d = judge.pick_multi(q, model=None)
+    assert d.indices == (0, 2)
+    assert d.fallback is False
+
+
+def test_pick_many_single_marker():
+    q = _q([{"label": "A"}, {"label": "B (Recommended)"}])
+    d = judge.pick_multi(q, model=None)
+    assert (d.indices, d.fallback) == ((1,), False)
+
+
+def test_pick_many_without_marker_falls_back_to_first_only():
+    q = _q([{"label": "A"}, {"label": "B"}, {"label": "C"}])
+    d = judge.pick_multi(q, model=None)
+    assert (d.indices, d.fallback) == ((0,), True)
+
+
+def test_pick_many_never_calls_the_model():
+    calls = []
+    q = _q([{"label": "A"}, {"label": "B"}])
+    judge.pick_multi(q, model="m", call_model=lambda *a: calls.append(a) or 1)
+    assert calls == [], "multi-select has no agreed way to ask for a set; do not guess"
+
+
+def test_pick_exposes_indices_for_single_select():
+    q = _q([{"label": "A"}, {"label": "B (Recommended)"}])
+    d = judge.pick(q, model=None)
+    assert (d.indices, d.index, d.label) == ((1,), 1, "B (Recommended)")

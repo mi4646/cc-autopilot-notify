@@ -3,7 +3,7 @@ from cc_autopilot_notify import daemon, state
 
 def _deps(revision="r1", foreground=True, choose_result=None, judge_index=1,
           choose_calls=None, prompt_id="p" * 64, epoch=1, options=None,
-          locate=(1, 2)):
+          locate=(1, 2), multi_indices=(0,), sleep=None):
     calls = choose_calls if choose_calls is not None else []
     opts = options if options is not None else [{"label": "A"}, {"label": "B"}]
     return daemon.Deps(
@@ -15,6 +15,8 @@ def _deps(revision="r1", foreground=True, choose_result=None, judge_index=1,
         notify=lambda msg: None,
         locate=lambda sid: locate,
         press=lambda p, key, repeat: {"ok": True},
+        judge_multi_fn=lambda q: multi_indices,
+        sleep=sleep or (lambda seconds: None),
     )
 
 
@@ -221,3 +223,89 @@ def test_prime_refuses_foreign_screen_text(tmp_path):
     daemon.tick(1000.0 + 190, tmp_path, _cfg(), deps)
     assert deps._keys == [], \
         "a screen that does not show the recorded labels must never be pressed"
+
+
+def _record_questions(tmp_path, questions, appeared=1000.0):
+    state.record(state.Pending(session_id="s1", window_id=1, pane_id=2,
+                               questions=questions, appeared_at=appeared,
+                               last_activity=appeared), tmp_path)
+
+
+def _screen_deps(screens, keys, judge_index=0, multi_indices=(0,)):
+    screens = list(screens)
+    deps = _deps(foreground=True, judge_index=judge_index,
+                 multi_indices=multi_indices)
+    deps.read = lambda p: screens.pop(0) if len(screens) > 1 else screens[0]
+    deps.press = lambda p, key, repeat: keys.append((key, repeat)) or {"ok": True}
+    return deps
+
+
+def test_answers_every_question_then_confirms_review(tmp_path):
+    _record_questions(tmp_path, [
+        {"question": "Q1", "options": [{"label": "A"}, {"label": "B"}]},
+        {"question": "Q2", "options": [{"label": "C"}, {"label": "D"}]},
+    ])
+    keys = []
+    deps = _screen_deps([
+        {"state": "attention", "text": "❯ 1. A\n  2. B\n", "revision": "r1"},
+        {"state": "attention", "text": "❯ 1. C\n  2. D\n", "revision": "r2"},
+        {"state": "attention", "text": "Review your answers\nSubmit answers\n",
+         "revision": "r3"},
+        {"state": "done", "text": "", "revision": "r4"},
+    ], keys)
+    daemon.tick(1000.0 + 150, tmp_path, _cfg(), deps)
+    assert keys == [("enter", 1), ("enter", 1), ("enter", 1)], keys
+
+
+def test_multiselect_toggles_each_chosen_option(tmp_path):
+    _record_questions(tmp_path, [
+        {"question": "Pick", "multiSelect": True,
+         "options": [{"label": "A"}, {"label": "B"}, {"label": "C"}]},
+    ])
+    keys = []
+    deps = _screen_deps([
+        {"state": "attention",
+         "text": ("❯ 1. [ ] A\n  2. [ ] B\n  3. [ ] C\n"
+                  "  4. [ ] Type something\n"), "revision": "r1"},
+        {"state": "done", "text": "", "revision": "r2"},
+    ], keys, multi_indices=(0, 2))
+    daemon.tick(1000.0 + 150, tmp_path, _cfg(), deps)
+    assert keys == [("space", 1), ("down", 2), ("space", 1),
+                    ("down", 2), ("enter", 1)], keys
+
+
+def test_unanswered_question_keeps_the_record_when_screen_goes_foreign(tmp_path):
+    _record_questions(tmp_path, [
+        {"question": "Q1", "options": [{"label": "A"}, {"label": "B"}]},
+        {"question": "Q2", "options": [{"label": "C"}, {"label": "D"}]},
+    ])
+    keys = []
+    deps = _screen_deps([
+        {"state": "attention", "text": "❯ 1. A\n  2. B\n", "revision": "r1"},
+        {"state": "attention", "text": "❯ 1. X\n  2. Y\n", "revision": "r2"},
+        {"state": "attention", "text": "❯ 1. X\n  2. Y\n", "revision": "r2"},
+    ], keys)
+    daemon.tick(1000.0 + 150, tmp_path, _cfg(), deps)
+    assert keys == [("enter", 1)], keys
+    got = state.load_all(tmp_path)
+    assert got, "partial success must keep the record for the remaining question"
+    assert got[0].choose_failures == 1
+
+
+def test_stalled_panel_advances_with_tab(tmp_path):
+    """A single-select question that does not auto-advance is left with Tab."""
+    _record_questions(tmp_path, [
+        {"question": "Q1", "options": [{"label": "A"}, {"label": "B"}]},
+        {"question": "Q2", "options": [{"label": "C"}, {"label": "D"}]},
+    ])
+    keys = []
+    deps = _screen_deps([
+        {"state": "attention", "text": "❯ 1. A\n  2. B\n", "revision": "r1"},
+        {"state": "attention", "text": "❯ 1. A\n  2. B\n", "revision": "r1"},
+        {"state": "attention", "text": "❯ 1. C\n  2. D\n", "revision": "r2"},
+        {"state": "attention", "text": "Review your answers\nSubmit answers\n",
+         "revision": "r3"},
+        {"state": "done", "text": "", "revision": "r4"},
+    ], keys)
+    daemon.tick(1000.0 + 150, tmp_path, _cfg(), deps)
+    assert keys == [("enter", 1), ("tab", 1), ("enter", 1), ("enter", 1)], keys

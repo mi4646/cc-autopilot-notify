@@ -35,6 +35,13 @@ LOCATE_GRACE_SECONDS = 300.0
 LOCATE_WARN_EVERY_SECONDS = 600.0
 _locate_warned_at: dict[str, float] = {}
 
+# How long to let the panel redraw between steps of a multi-question answer.
+# The whole sequence runs inside one tick so our own keypresses cannot be
+# mistaken for the user changing the dialog.
+ANSWER_STEP_SECONDS = 0.3
+MAX_ANSWER_STEPS = 12
+MAX_STALLS = 2
+
 
 @dataclasses.dataclass
 class Deps:
@@ -44,10 +51,109 @@ class Deps:
     judge_fn: Callable[[dict], int]
     notify: Callable[[str], None]
     locate: Callable[[str], "tuple[int, int] | None"] = lambda sid: None
+    judge_multi_fn: Callable[[dict], "tuple[int, ...]"] = lambda q: (0,)
+    sleep: Callable[[float], None] = time.sleep
+
+
+class _PressRefused(Exception):
+    pass
+
+
+class _JudgeFailed(Exception):
+    pass
 
 
 def should_fire(pending: state.Pending, now: float, threshold: float) -> bool:
     return (now - pending.last_activity) >= threshold
+
+
+def _press_or_raise(pending: state.Pending, key: str, repeat: int,
+                    deps: Deps) -> None:
+    try:
+        result = deps.press(pending, key, repeat)
+    except Exception as exc:  # noqa: BLE001
+        raise _PressRefused(key) from exc
+    if result.get("ok", True) is False:
+        raise _PressRefused(key)
+
+
+def _answer_sequence(pending: state.Pending, reading: dict,
+                     deps: Deps) -> tuple[dict, list[int]]:
+    """Answer every visible question, confirm the review, return the last read.
+
+    Runs to completion inside one tick: between steps the panel redraws, and
+    re-reading here keeps those self-inflicted revision changes out of the
+    "user is interacting" check.
+    """
+    questions = pending.questions or []
+    needs_review = len(questions) > 1 or any(q.get("multiSelect") for q in questions)
+    answered: set[int] = set()
+    chosen: list[int] = []
+    review_confirmed = False
+    stalls = 0
+
+    for _ in range(MAX_ANSWER_STEPS):
+        text = str(reading.get("text") or "")
+
+        if screen.is_review_screen(text):
+            if review_confirmed:
+                raise screen.ScreenMismatch("review page did not close after confirming")
+            review_confirmed = True
+            _press_or_raise(pending, "enter", 1, deps)
+            deps.sleep(ANSWER_STEP_SECONDS)
+            reading = deps.read(pending)
+            continue
+
+        match = screen.match_question(questions, text)
+        if match is None:
+            if len(answered) < len(questions):
+                if reading.get("state") == "attention" and text.strip():
+                    raise screen.ScreenMismatch(
+                        "visible question is not in the recorded prompt")
+                if stalls >= MAX_STALLS:
+                    raise screen.ScreenMismatch(
+                        "panel closed before every question was answered")
+                stalls += 1
+                deps.sleep(ANSWER_STEP_SECONDS)
+                reading = deps.read(pending)
+                continue
+            return reading, chosen
+
+        index, question = match
+        if index in answered:
+            if len(answered) >= len(questions) and not needs_review:
+                return reading, chosen
+            if stalls >= MAX_STALLS:
+                raise screen.ScreenMismatch("panel never advanced past a question")
+            stalls += 1
+            if len(answered) < len(questions):
+                _press_or_raise(pending, "tab", 1, deps)
+            deps.sleep(ANSWER_STEP_SECONDS)
+            reading = deps.read(pending)
+            continue
+
+        try:
+            if question.get("multiSelect"):
+                indices = list(deps.judge_multi_fn(question))
+                presses = screen.plan_multi(question, text, indices)
+            else:
+                index_choice = deps.judge_fn(question)
+                indices = [index_choice]
+                presses = screen.plan(question, text, index_choice)
+        except screen.ScreenMismatch:
+            raise
+        except Exception as exc:  # noqa: BLE001 - judge failure ends the record
+            raise _JudgeFailed(str(exc)) from exc
+
+        for key, repeat in presses:
+            _press_or_raise(pending, key, repeat, deps)
+        answered.add(index)
+        chosen.extend(indices)
+        stalls = 0
+        deps.sleep(ANSWER_STEP_SECONDS)
+        reading = deps.read(pending)
+
+    raise screen.ScreenMismatch("too many steps answering the panel")
 
 
 def _give_up(sid: str, root: Path, deps: "Deps", message: str) -> None:
@@ -125,45 +231,35 @@ def _tick_one(pending: state.Pending, now: float, root: Path, cfg: dict,
     if not should_fire(pending, now, threshold):
         return
 
-    # Which option: the hook's structured data (judge), never the screen.
-    question = (pending.questions or [{}])[0]
+    # Answer every question in the panel, then confirm the review if one is
+    # shown. The revision stored is the one read after the last keypress, so
+    # the next tick does not mistake our own presses for user activity.
     try:
-        choice = deps.judge_fn(question)
-    except Exception as exc:  # noqa: BLE001 - one bad question must not stop the loop
-        log.warning("daemon: judge failed for %s (%s)", sid, exc)
-        _give_up(sid, root, deps, f"{sid}: judge failed ({exc})")
-        return
-
-    # Screen agreement: the recorded labels must appear as numbered rows with a
-    # visible cursor, or we refuse. This is what stops a key press from landing
-    # on a different dialog than the question we recorded.
-    try:
-        presses = screen.plan(question, str(reading.get("text") or ""), choice)
+        reading, chosen = _answer_sequence(pending, reading, deps)
     except screen.ScreenMismatch as exc:
-        # Unlike the prompt-shape case this is recoverable: a redraw, a second
-        # question, a rendering delay. Do not drop the record; report once.
         failures = state.bump_choose_failures(sid, root)
         log.info("daemon: screen mismatch for %s (%s)", sid, exc)
         if failures >= 3:
             _give_up(sid, root, deps, f"{sid}: giving up, screen never matched ({exc})")
         return
+    except _PressRefused as exc:
+        failures = state.bump_choose_failures(sid, root)
+        log.info("daemon: press refused for %s attempt %s", sid, exc)
+        if failures >= 2:
+            state.forget(sid, root)
+            deps.notify("Gave up auto-answering this question; left it to the user")
+        return
+    except _JudgeFailed as exc:
+        log.warning("daemon: judge failed for %s (%s)", sid, exc)
+        _give_up(sid, root, deps, f"{sid}: judge failed ({exc})")
+        return
+    except Exception as exc:  # noqa: BLE001 - a read outage keeps the record
+        log.warning("daemon: answer failed for %s (%s)", sid, exc)
+        return
 
-    for key, repeat in presses:
-        try:
-            result = deps.press(pending, key, repeat)
-        except Exception as exc:  # noqa: BLE001
-            result = {"ok": False, "error": {"code": "raised", "message": str(exc)}}
-        if result.get("ok", True) is False:
-            failures = state.bump_choose_failures(sid, root)
-            log.info("daemon: press refused for %s attempt %s (%s)",
-                     sid, key, (result.get("error") or {}).get("code"))
-            if failures >= 2:
-                state.forget(sid, root)
-                deps.notify("Gave up auto-answering this question; left it to the user")
-            return
-
+    choice = ",".join(str(i) for i in chosen)
     actions.append(f"{sid}: auto-answered option {choice}")
-    state.touch(sid, root, when=now, revision=revision)
+    state.touch(sid, root, when=now, revision=reading.get("revision"))
     deps.notify(f"Auto-answered: option {choice}")
 
 
@@ -194,6 +290,9 @@ def build_deps(appdata: Path, cfg: dict) -> Deps:
     def do_judge(question: dict) -> int:
         return judge.pick(question, model=config.judge_model(cfg)).index
 
+    def do_judge_multi(question: dict) -> tuple[int, ...]:
+        return judge.pick_multi(question, model=config.judge_model(cfg)).indices
+
     from . import channels
 
     def do_notify(message: str) -> None:
@@ -202,7 +301,8 @@ def build_deps(appdata: Path, cfg: dict) -> Deps:
 
     return Deps(read=do_read, press=do_press,
                 foreground=presence.is_foreground,
-                judge_fn=do_judge, notify=do_notify, locate=do_locate)
+                judge_fn=do_judge, judge_multi_fn=do_judge_multi,
+                notify=do_notify, locate=do_locate)
 
 
 def run(root: Path, cfg: dict, appdata: Path | None = None) -> None:

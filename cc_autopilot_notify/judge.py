@@ -26,22 +26,26 @@ _SUFFIXES = ("(recommended)", "（推荐）", "(推荐)", "（recommended）")
 
 @dataclasses.dataclass
 class Decision:
-    index: int
-    label: str
+    indices: tuple[int, ...]
+    labels: tuple[str, ...]
     reason: str
     fallback: bool
+
+    @property
+    def index(self) -> int:
+        return self.indices[0]
+
+    @property
+    def label(self) -> str:
+        return self.labels[0]
 
 
 def _labels(question: dict) -> list[dict]:
     return [o for o in (question.get("options") or []) if isinstance(o, dict)]
 
 
-def marker_index(question: dict) -> int | None:
-    """Return the index of the single recommended option, or None.
-
-    None covers both "no marker" and "more than one marker": when Claude did not
-    express one preference, guessing which of two it meant is not our call.
-    """
+def marker_indices(question: dict) -> list[int]:
+    """Every option Claude marked recommended, in screen order."""
     hits: list[int] = []
     for index, option in enumerate(_labels(question)):
         label = str(option.get("label") or "").strip()
@@ -51,6 +55,16 @@ def marker_index(question: dict) -> int | None:
             continue
         if "recommended" in str(option.get("description") or "").lower():
             hits.append(index)
+    return hits
+
+
+def marker_index(question: dict) -> int | None:
+    """Return the index of the single recommended option, or None.
+
+    None covers both "no marker" and "more than one marker": when Claude did not
+    express one preference, guessing which of two it meant is not our call.
+    """
+    hits = marker_indices(question)
     if len(hits) == 1:
         return hits[0]
     if len(hits) > 1:
@@ -107,7 +121,8 @@ def pick(question: dict, model: str | None, call_model=None) -> Decision:
 
     marked = marker_index(question)
     if marked is not None:
-        return Decision(index=marked, label=str(options[marked].get("label", "")),
+        return Decision(indices=(marked,),
+                        labels=(str(options[marked].get("label", "")),),
                         reason="claude marked it recommended", fallback=False)
 
     if model:
@@ -118,11 +133,34 @@ def pick(question: dict, model: str | None, call_model=None) -> Decision:
             log.warning("judge: model call failed (%s); falling back to option 0", exc)
             index = -1
         if 0 <= index < len(options):
-            return Decision(index=index, label=str(options[index].get("label", "")),
+            return Decision(indices=(index,),
+                            labels=(str(options[index].get("label", "")),),
                             reason=f"model {model}", fallback=False)
         if index != -1:
             log.warning("judge: model returned out-of-range index %s", index)
 
-    return Decision(index=0, label=str(options[0].get("label", "")),
+    return Decision(indices=(0,), labels=(str(options[0].get("label", "")),),
+                    reason="no recommendation available; fell back to first option",
+                    fallback=True)
+
+
+def pick_multi(question: dict, model: str | None = None, call_model=None) -> Decision:
+    """Choose the set of options to tick in a multi-select question.
+
+    All recommended markers are ticked; with no marker the answer is the first
+    option alone, matching the single-select fallback. The model is not asked:
+    there is no prompt shape for "a set of options" that we have verified, and
+    guessing a set is worse than ticking one.
+    """
+    options = _labels(question)
+    if not options:
+        raise ValueError("question has no options to choose from")
+
+    hits = marker_indices(question)
+    if hits:
+        return Decision(indices=tuple(hits),
+                        labels=tuple(str(options[i].get("label", "")) for i in hits),
+                        reason="claude marked them recommended", fallback=False)
+    return Decision(indices=(0,), labels=(str(options[0].get("label", "")),),
                     reason="no recommendation available; fell back to first option",
                     fallback=True)

@@ -90,3 +90,50 @@ def test_plan_matches_recommended_suffix_rendering():
 def test_plan_matches_chinese_recommended_suffix():
     text = "❯ 1. 甲\n  2. 乙\n"
     assert screen.plan(_q(["甲", "乙（推荐）"]), text, 1) == [("down", 1), ("enter", 1)]
+
+
+def _multi_q(labels, question="Q?"):
+    return {"question": question, "multiSelect": True,
+            "options": [{"label": l} for l in labels]}
+
+
+def test_parse_rows_strips_multiselect_checkbox():
+    text = "❯ 1. [ ] A\n  2. [✓] B\n"
+    assert [r[1] for r in screen.parse_rows(text, multi=True)] == ["A", "B"]
+
+
+def test_plan_multi_toggles_each_target_then_submits():
+    text = ("❯ 1. [ ] A\n  2. [ ] B\n  3. [✓] C\n"
+            "  4. [ ] Type something\n")
+    assert screen.plan_multi(_multi_q(["A", "B", "C"]), text, (0, 2)) == \
+        [("space", 1), ("down", 2), ("space", 1), ("down", 2), ("enter", 1)]
+
+
+def test_plan_multi_single_target():
+    text = "❯ 1. [ ] A\n  2. [ ] B\n  3. [ ] Type something\n"
+    assert screen.plan_multi(_multi_q(["A", "B"]), text, (1,)) == \
+        [("down", 1), ("space", 1), ("down", 2), ("enter", 1)]
+
+
+def test_plan_multi_refuses_a_foreign_screen():
+    text = "❯ 1. [ ] X\n  2. [ ] Y\n"
+    try:
+        screen.plan_multi(_multi_q(["A", "B"]), text, (0,))
+    except screen.ScreenMismatch:
+        return
+    raise AssertionError("must not toggle options recorded for another dialog")
+
+
+def test_match_question_finds_the_visible_one():
+    q1 = _q(["A", "B"])
+    q2 = _q(["C", "D"])
+    assert screen.match_question([q1, q2], "❯ 1. C\n  2. D\n")[0] == 1
+
+
+def test_match_question_returns_none_for_foreign_screen():
+    assert screen.match_question([_q(["A", "B"])], "❯ 1. X\n  2. Y\n") is None
+
+
+def test_review_screen_detection():
+    assert screen.is_review_screen("Review your answers\nSubmit answers\n")
+    assert not screen.is_review_screen("❯ 1. A\n  2. B\n")
