@@ -1,7 +1,7 @@
 # 系统空闲感知的自动应答阈值设计
 
 - 日期：2026-10-28
-- 状态：已部署（0.2.2），待实机验收
+- 状态：已部署（0.2.3），锁屏路径实测通过；「人在场不答」待测
 - 目标仓库：`/var/www/cc-autopilot-notify`
 - 取代：`2026-10-27-cc-autopilot-notify-design.md` 的 §1.1 第 2 条、§1.2 的 S4/S5、§5 的 `thresholds` 语义
 
@@ -416,7 +416,7 @@ Codex 未完成，故不计为完整 outside coverage。
 - [x] **T2 (P1)** — daemon — 已完成:双阈值 + 5s 缓存 + 失败退避/告警 + 缓存失效；`tests/test_daemon.py` 31 passed
 - [x] **T3 (P1)** — doctor — 已完成:`powershell presence` 检查；`tests/test_doctor.py` 19 passed
 - [x] **T4 (P2)** — config/docs — 已完成:README 写明系统空闲条件；`_threshold` 保留并由两档阈值使用
-- [x] **T5 (P1)** — delivery — 已完成:0.2.2 已提交（`0cad1f9`）并推送、插件已更新、daemon 已重启（pid 504363，心跳 0.2.2）、doctor `powershell presence` PASS。**实机验收仍未跑**（见 §5 验收 1–5）
+- [x] **T5 (P1)** — delivery — 已完成:0.2.3 已推送（`ec2e748`）、插件已更新、daemon 已重启（pid 540291，心跳 0.2.3）、doctor PASS。**锁屏实机测试通过**（17:42:52 `auto-answered option 0`）；「人在场不答」仍待单独验证
   - Verify: `python -m pytest tests/ -q`；`tests/test_plugin_package.py`；新心跳版本 0.2.2；`doctor` 显示 `powershell presence` PASS
 
 ---

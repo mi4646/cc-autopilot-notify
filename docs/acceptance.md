@@ -213,9 +213,18 @@ Code settings, start the daemon, and ask one real question.
 - `::test_gate_*` — 5 s 缓存、失败退避、60 s 告警、恢复通知
 - `test_doctor.py::test_doctor_reports_presence_*`
 
-**实机验收：未运行。** 需要部署 0.2.2、重启 daemon，并用真实
-`AskUserQuestion` 分别验证「人在电脑前不答」「离开 150/90 秒后答」
-「锁屏时 `pane.send_key` 仍能按下」。在这三项跑完之前，不能把本节当作通过。
+**实机验收：部分运行。** 锁屏路径已通过（见下）；「人在电脑前不答」仍需单独跑一次。
+
+### 2026-10-28 锁屏实测第 2 次（0.2.3）：通过
+
+- **操作**：再次发出测试用 `AskUserQuestion`，按 Win+L 锁屏，等待约 90 秒。
+- **结果**：本题被自动选为 **A**。`daemon.log` 记录：
+  `2026-10-28 17:42:52 INFO daemon: 4892ef03-…: auto-answered option 0`
+- **同时验证**：
+  - 没有 `user is interacting` 刷屏——revision 自绘不再阻塞；
+  - 约 90 秒触发，与后台阈值一致；
+  - `pane.send_key` 在锁屏状态下成功（前提：陛下在返回前没有解锁或手动点击）。
+- **残留限制**：没有独立记录按下瞬间的锁屏状态与 `idle` 值。若要严格证明「按键发生在锁屏期间」，需要在按下时同步记录 `GetForegroundWindow` 与 `idle`。本次按操作约定判定为通过。
 
 ### 部署记录（已核对）
 
@@ -241,4 +250,4 @@ Code settings, start the daemon, and ask one real question.
   sha256 每秒变化；旧的 revision 门控把它误判为「用户正在操作」。
 - **修复**：删除 revision 硬门控；真实交互由系统空闲判定（按键/鼠标立即归零）。
   新增回归测试 `tests/test_daemon.py::test_panel_redraw_alone_does_not_block`。
-- **状态**：待重新部署后重测。第一次实测不能算通过。
+- **状态**：已在 0.2.3 重测通过（见下一节）。第一次实测不能算通过。
