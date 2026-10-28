@@ -53,3 +53,36 @@ def test_feishu_string_zero_code_is_accepted():
     channels.feishu.check_response(200, json.dumps({"code": "0", "msg": "ok"}))
 
 
+def _rich(**over):
+    base = dict(title="Needs input", body="Pick one",
+                project="/var/www/demo", session_id="abcdef1234567890",
+                event="AskUserQuestion", question_count=2, options=["A", "B"])
+    base.update(over)
+    return channels.Notification(**base)
+
+
+def test_feishu_card_shows_project_count_options_and_session():
+    card = channels.feishu._card(_rich())
+    fields = json.dumps(card["card"]["elements"][1]["fields"], ensure_ascii=False)
+    assert "**项目**\\ndemo" in fields, "project must be the basename"
+    assert "**问题数**\\n2" in fields
+    assert "**选项**\\nA / B" in fields
+    assert "**Session**\\nabcdef12" in fields
+
+
+def test_feishu_card_omits_empty_extra_fields():
+    card = channels.feishu._card(_rich(question_count=0, options=[], session_id=""))
+    fields = json.dumps(card["card"]["elements"][1]["fields"], ensure_ascii=False)
+    assert "问题数" not in fields
+    assert "选项" not in fields
+    assert "Session" not in fields
+
+
+def test_feishu_card_color_follows_event():
+    assert channels.feishu._card(_rich())["card"]["header"]["template"] == "orange"
+    assert channels.feishu._card(
+        _rich(event="idle_prompt"))["card"]["header"]["template"] == "blue"
+    assert channels.feishu._card(
+        _rich(event="StopFailure"))["card"]["header"]["template"] == "red"
+
+

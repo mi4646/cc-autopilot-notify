@@ -39,6 +39,20 @@ def _capture(monkeypatch):
     return seen
 
 
+def test_question_notification_carries_all_questions_and_options(tmp_path, monkeypatch):
+    seen = _capture(monkeypatch)
+    ev = _auq_event()
+    ev["tool_input"]["questions"] = [
+        {"question": "Q1", "options": [{"label": "A"}, {"label": "B"}]},
+        {"question": "Q2", "options": [{"label": "C"}]},
+    ]
+    assert hook_pre_tool.handle(ev, tmp_path, {"channels": {}, "thresholds": {}}) == 0
+    n = seen[0]
+    assert n.question_count == 2
+    assert n.options == ["A", "B"]
+    assert n.body == "Q1", "options belong in their own card field, not the body"
+
+
 def test_stop_event_does_not_notify(tmp_path, monkeypatch):
     """Stop fires every turn; a notification per turn is the bug being fixed."""
     seen = _capture(monkeypatch)

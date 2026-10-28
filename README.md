@@ -28,6 +28,8 @@ typing in another window keeps system idle at zero, so the timer does not run.
 ### Notification policy
 
 - **Questions** notify immediately (`PreToolUse` on `AskUserQuestion`).
+- Feishu cards show the project basename, event, question count, option labels
+  and a short session id; the header color follows the event.
 - **"Claude finished"** uses Claude Code's own `idle_prompt` notification: it
   fires about 60 s after Claude stops, only if you have not typed and no
   background agent is still running. `Stop` itself fires every turn, so it is

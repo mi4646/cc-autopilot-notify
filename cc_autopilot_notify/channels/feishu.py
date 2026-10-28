@@ -41,21 +41,48 @@ def check_response(status: int, body: str) -> None:
         raise FeishuError(f"code={code} msg={parsed.get('msg') or parsed.get('StatusMessage')}")
 
 
+_COLORS = {
+    "AskUserQuestion": "orange",
+    "permission_prompt": "orange",
+    "agent_needs_input": "orange",
+    "elicitation_dialog": "orange",
+    "elicitation_url_dialog": "orange",
+    "idle_prompt": "blue",
+    "StopFailure": "red",
+}
+
+
+def _project_name(value: str) -> str:
+    """A cwd becomes the last path segment, matching cc-notify-hooks."""
+    value = (value or "").strip()
+    if not value:
+        return "unknown"
+    return value.replace("\\", "/").rstrip("/").rsplit("/", 1)[-1] or value
+
+
+def _field(label: str, value: str) -> dict:
+    return {"is_short": True,
+            "text": {"tag": "lark_md", "content": f"**{label}**\n{value}"}}
+
+
 def _card(n) -> dict:
-    fields = [f"**项目**\n{n.project or 'unknown'}", f"**事件**\n{n.event or 'unknown'}"]
+    fields = [_field("项目", _project_name(n.project)),
+              _field("事件", n.event or "unknown")]
+    if n.question_count > 0:
+        fields.append(_field("问题数", str(n.question_count)))
+    if n.options:
+        fields.append(_field("选项", " / ".join(n.options)))
+    if n.session_id:
+        fields.append(_field("Session", n.session_id[:8]))
     return {
         "msg_type": "interactive",
         "card": {
             "config": {"wide_screen_mode": True},
-            "header": {"template": "blue",
+            "header": {"template": _COLORS.get(n.event, "blue"),
                        "title": {"tag": "plain_text", "content": n.title}},
             "elements": [
                 {"tag": "div", "text": {"tag": "lark_md", "content": n.body}},
-                {"tag": "div", "fields": [
-                    {"is_short": True,
-                     "text": {"tag": "lark_md", "content": f}}
-                    for f in fields
-                ]},
+                {"tag": "div", "fields": fields},
             ],
         },
     }

@@ -63,8 +63,6 @@ def handle(event: dict, root: Path, cfg: dict) -> int:
     labels = [o.get("label", "") for o in (first.get("options") or [])
               if isinstance(o, dict)]
     body = str(first.get("question") or "")[:300]
-    if labels:
-        body += "\n选项: " + " / ".join(str(x) for x in labels[:6])
 
     channels.send_all(
         channels.Notification(
@@ -73,6 +71,8 @@ def handle(event: dict, root: Path, cfg: dict) -> int:
             project=event.get("cwd") or "",
             session_id=session_id,
             event=TOOL,
+            question_count=len(questions),
+            options=[str(x) for x in labels[:6]],
         ),
         cfg,
     )

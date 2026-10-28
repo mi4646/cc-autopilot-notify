@@ -25,6 +25,8 @@ class Notification:
     project: str = ""
     session_id: str = ""
     event: str = ""
+    question_count: int = 0
+    options: list[str] = dataclasses.field(default_factory=list)
 
 
 # Fixed order: the cheapest channel first, so a slow network channel cannot
