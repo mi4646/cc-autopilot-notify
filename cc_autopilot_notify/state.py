@@ -35,6 +35,7 @@ class Pending:
     last_activity: float
     revision: str | None = None
     choose_failures: int = 0
+    cwd: str = ""
 
 
 def _sanitise(session_id: str) -> str:

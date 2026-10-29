@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Callable
 
 from . import config, judge, pebrel_runtime, presence, screen, state
+from .channels import Notification, title_with_project
 
 log = logging.getLogger(__name__)
 
@@ -57,10 +58,10 @@ class Deps:
     read: Callable[[state.Pending], dict]
     press: Callable[[state.Pending, str, int], dict]        # (pending, key, repeat)
     sample: Callable[[], "presence.Presence | None"]
-    judge_fn: Callable[[dict], int]
-    notify: Callable[[str], None]
+    judge_fn: Callable[[dict], "judge.Decision"]
+    notify: Callable[[object], None]  # str or channels.Notification
     locate: Callable[[str], "tuple[int, int] | None"] = lambda sid: None
-    judge_multi_fn: Callable[[dict], "tuple[int, ...]"] = lambda q: (0,)
+    judge_multi_fn: Callable[[dict], "judge.Decision"] = lambda q: (0,)
     sleep: Callable[[float], None] = time.sleep
 
 
@@ -130,18 +131,37 @@ def _press_or_raise(pending: state.Pending, key: str, repeat: int,
         raise _PressRefused(key)
 
 
+def _reason_text(decision: "judge.Decision") -> str:
+    if decision.fallback:
+        return "无推荐，选了第一项"
+    if "marked" in decision.reason:
+        return "Claude 标记推荐"
+    return "模型判断"
+
+
+def _answer_summary(answers: list[dict]) -> str:
+    """One line per question: what was chosen and why, for the Feishu record."""
+    lines = []
+    for i, answer in enumerate(answers, 1):
+        lines.append(f"Q{i}: {answer['question']}\n→ {'、'.join(answer['labels'])}"
+                     f"（{_reason_text(answer['decision'])}）")
+    return "\n\n".join(lines)
+
+
 def _answer_sequence(pending: state.Pending, reading: dict,
-                     deps: Deps) -> tuple[dict, list[int]]:
+                     deps: Deps) -> tuple[dict, list[int], list[dict]]:
     """Answer every visible question, confirm the review, return the last read.
 
     Runs to completion inside one tick: between steps the panel redraws, and
     re-reading here keeps those self-inflicted revision changes out of the
-    "user is interacting" check.
+    "user is interacting" check. Returns the readings plus one record per
+    question: question text, chosen label(s), and the judge's decision.
     """
     questions = pending.questions or []
     needs_review = len(questions) > 1 or any(q.get("multiSelect") for q in questions)
     answered: set[int] = set()
     chosen: list[int] = []
+    answers: list[dict] = []
     review_confirmed = False
     stalls = 0
 
@@ -170,12 +190,12 @@ def _answer_sequence(pending: state.Pending, reading: dict,
                 deps.sleep(ANSWER_STEP_SECONDS)
                 reading = deps.read(pending)
                 continue
-            return reading, chosen
+            return reading, chosen, answers
 
         index, question = match
         if index in answered:
             if len(answered) >= len(questions) and not needs_review:
-                return reading, chosen
+                return reading, chosen, answers
             if stalls >= MAX_STALLS:
                 raise screen.ScreenMismatch("panel never advanced past a question")
             stalls += 1
@@ -185,14 +205,18 @@ def _answer_sequence(pending: state.Pending, reading: dict,
             reading = deps.read(pending)
             continue
 
+        labels: list[str]
         try:
             if question.get("multiSelect"):
-                indices = list(deps.judge_multi_fn(question))
+                decision = deps.judge_multi_fn(question)
+                indices = list(decision.indices)
+                labels = [str(x) for x in decision.labels]
                 presses = screen.plan_multi(question, text, indices)
             else:
-                index_choice = deps.judge_fn(question)
-                indices = [index_choice]
-                presses = screen.plan(question, text, index_choice)
+                decision = deps.judge_fn(question)
+                indices = [decision.index]
+                labels = [decision.label]
+                presses = screen.plan(question, text, decision.index)
         except screen.ScreenMismatch:
             raise
         except Exception as exc:  # noqa: BLE001 - judge failure ends the record
@@ -202,6 +226,8 @@ def _answer_sequence(pending: state.Pending, reading: dict,
             _press_or_raise(pending, key, repeat, deps)
         answered.add(index)
         chosen.extend(indices)
+        answers.append({"question": str(question.get("question") or ""),
+                        "labels": labels, "decision": decision})
         stalls = 0
         deps.sleep(ANSWER_STEP_SECONDS)
         reading = deps.read(pending)
@@ -293,7 +319,7 @@ def _tick_one(pending: state.Pending, now: float, root: Path, cfg: dict,
     # the next tick does not mistake our own presses for user activity.
     answered[0] = True
     try:
-        reading, chosen = _answer_sequence(pending, reading, deps)
+        reading, chosen, answers = _answer_sequence(pending, reading, deps)
     except screen.ScreenMismatch as exc:
         failures = state.bump_choose_failures(sid, root)
         log.info("daemon: screen mismatch for %s (%s)", sid, exc)
@@ -318,7 +344,16 @@ def _tick_one(pending: state.Pending, now: float, root: Path, cfg: dict,
     choice = ",".join(str(i) for i in chosen)
     actions.append(f"{sid}: auto-answered option {choice}")
     state.touch(sid, root, when=now, revision=reading.get("revision"))
-    deps.notify(f"Auto-answered: option {choice}")
+    summary = _answer_summary(answers)
+    deps.notify(Notification(
+        title=title_with_project("自动应答", pending.cwd),
+        body=summary,
+        project=pending.cwd,
+        session_id=sid,
+        event="auto_answer",
+        question_count=len(answers),
+        created_at=now,
+    ))
 
 
 def tick(now: float, root: Path, cfg: dict, deps: Deps, *, pid: int | None = None,
@@ -355,11 +390,11 @@ def build_deps(appdata: Path, cfg: dict) -> Deps:
     def do_locate(session_id: str):
         return pebrel_runtime.locate(appdata, session_id)
 
-    def do_judge(question: dict) -> int:
-        return judge.pick(question, model=config.judge_model(cfg)).index
+    def do_judge(question: dict) -> "judge.Decision":
+        return judge.pick(question, model=config.judge_model(cfg))
 
-    def do_judge_multi(question: dict) -> tuple[int, ...]:
-        return judge.pick_multi(question, model=config.judge_model(cfg)).indices
+    def do_judge_multi(question: dict) -> "judge.Decision":
+        return judge.pick_multi(question, model=config.judge_model(cfg))
 
     from . import channels
 

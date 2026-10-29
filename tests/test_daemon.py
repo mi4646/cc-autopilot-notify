@@ -1,4 +1,5 @@
-from cc_autopilot_notify import daemon, state
+from cc_autopilot_notify import daemon, state, judge
+from cc_autopilot_notify.judge import Decision
 from cc_autopilot_notify.presence import Presence
 
 
@@ -17,16 +18,30 @@ def _deps(revision="r1", foreground=True, idle_seconds=1000.0, choose_result=Non
             return seq.pop(0)
         return Presence(foreground=foreground, idle_seconds=idle_seconds)
 
+    def do_judge(q):
+        opts_q = [o for o in (q.get("options") or []) if isinstance(o, dict)]
+        idx = min(judge_index, max(len(opts_q) - 1, 0))
+        return Decision(indices=(idx,),
+                        labels=(str(opts_q[idx].get("label", "")),),
+                        reason="claude marked it recommended", fallback=False)
+
+    def do_judge_multi(q):
+        opts_q = [o for o in (q.get("options") or []) if isinstance(o, dict)]
+        idxs = tuple(i for i in multi_indices if i < len(opts_q)) or (0,)
+        return Decision(indices=idxs,
+                        labels=tuple(str(opts_q[i].get("label", "")) for i in idxs),
+                        reason="claude marked them recommended", fallback=False)
+
     return daemon.Deps(
         read=lambda p: {"revision": revision,
                         "prompt": {"prompt_id": prompt_id, "options": opts},
                         "identity": {"epoch": epoch}},
         sample=do_sample,
-        judge_fn=lambda q: judge_index,
+        judge_fn=do_judge,
         notify=lambda msg: None,
         locate=lambda sid: locate,
         press=lambda p, key, repeat: {"ok": True},
-        judge_multi_fn=lambda q: multi_indices,
+        judge_multi_fn=do_judge_multi,
         sleep=sleep or (lambda seconds: None),
     )
 
@@ -512,3 +527,99 @@ def test_gate_sends_recovery_only_after_a_warned_outage():
         gate.get(float(now), deps)
     gate.get(1066.0, deps)
     assert deps.notes == [daemon.OUTAGE_MESSAGE, daemon.RECOVERY_MESSAGE]
+
+
+# --- auto-answer notification carries what was chosen and why ---------------
+
+def _decision_deps(keys, decisions, judge_decisions):
+    """Deps whose judge fns return full Decision objects, one per question."""
+    import itertools
+
+    decisions = list(decisions)
+    deps = _deps(foreground=True)
+    deps.read = lambda p: {"state": "attention",
+                           "text": "  ❯ 1. A\n  2. B\n", "revision": "r1"}
+    deps.press = lambda p, key, repeat: keys.append((key, repeat)) or {"ok": True}
+    deps.judge_fn = lambda q: judge_decisions.pop(0) if len(judge_decisions) > 1 \
+        else judge_decisions[0]
+    deps.judge_multi_fn = lambda q: judge_decisions[0]
+    deps.notes = decisions
+    deps.notify = lambda msg: decisions.append(msg) or None
+    return deps
+
+
+def test_answer_notification_names_the_choice_and_its_reason(tmp_path):
+    from cc_autopilot_notify.judge import Decision
+
+    _seed(tmp_path, appeared=1000.0)
+    keys = []
+    deps = _decision_deps(keys, [], [Decision(
+        indices=(1,), labels=("B",), reason="claude marked it recommended",
+        fallback=False)])
+    daemon.tick(1000.0 + 150, tmp_path, _cfg(), deps)
+    assert keys, "must answer"
+    assert len(deps.notes) == 1
+    note = deps.notes[0]
+    assert "Q" in note.body, "question text must be in the notification"
+    assert "B" in note.body, "chosen label must be in the notification"
+    assert "Claude 标记推荐" in note.body, "reason must be translated for the record"
+    assert note.event == "auto_answer", "the green card header"
+    assert "option 0" not in note.body, "index-only messages are unreadable records"
+
+
+def test_answer_notification_flags_the_fallback(tmp_path):
+    from cc_autopilot_notify.judge import Decision
+
+    _seed(tmp_path, appeared=1000.0)
+    keys = []
+    deps = _decision_deps(keys, [], [Decision(
+        indices=(0,), labels=("A",), reason="no recommendation available",
+        fallback=True)])
+    daemon.tick(1000.0 + 150, tmp_path, _cfg(), deps)
+    note = deps.notes[0]
+    assert "无推荐" in note.body, "a blind pick must be visible as such"
+    assert "A" in note.body
+
+
+def test_answer_notification_names_the_project_from_pending_cwd(tmp_path):
+    from cc_autopilot_notify.judge import Decision
+
+    p = state.Pending(session_id="s1", window_id=1, pane_id=2,
+                      questions=[{"question": "Q",
+                                  "options": [{"label": "A"}, {"label": "B"}]}],
+                      appeared_at=1000.0, last_activity=1000.0, cwd="/var/www/demo")
+    state.record(p, tmp_path)
+    keys = []
+    deps = _decision_deps(keys, [], [Decision(
+        indices=(0,), labels=("A",), reason="claude marked it recommended",
+        fallback=False)])
+    daemon.tick(1000.0 + 150, tmp_path, _cfg(), deps)
+    assert deps.notes, "must notify"
+    assert deps.notes[0].title == "demo · 自动应答"
+
+
+def test_multiselect_notification_lists_every_chosen_label(tmp_path):
+    from cc_autopilot_notify.judge import Decision
+
+    _record_questions(tmp_path, [
+        {"question": "Pick", "multiSelect": True,
+         "options": [{"label": "A"}, {"label": "B"}, {"label": "C"}]},
+    ])
+    keys = []
+    deps = _decision_deps(keys, [], [Decision(
+        indices=(0, 2), labels=("A", "C"), reason="claude marked them recommended",
+        fallback=False)])
+    screens = [
+        {"state": "attention",
+         "text": ("❯ 1. [ ] A\n  2. [ ] B\n  3. [ ] C\n"
+                  "  4. [ ] Type something\n"), "revision": "r1"},
+        {"state": "attention", "text": "Review your answers\nSubmit answers\n",
+         "revision": "r2"},
+        {"state": "done", "text": "", "revision": "r3"},
+    ]
+    deps.read = lambda p: screens.pop(0) if len(screens) > 1 else screens[0]
+    daemon.tick(1000.0 + 150, tmp_path, _cfg(), deps)
+    assert keys, "must answer"
+    note = deps.notes[0]
+    assert "A、C" in note.body, "every chosen label must appear"
+    assert "B" not in note.body, "unchosen label must not appear"

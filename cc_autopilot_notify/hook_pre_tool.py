@@ -53,6 +53,7 @@ def handle(event: dict, root: Path, cfg: dict) -> int:
         questions=questions,
         appeared_at=now,
         last_activity=now,
+        cwd=event.get("cwd") or "",
     )
     try:
         state.record(pending, root)

@@ -102,3 +102,16 @@ def test_title_carries_the_project_so_the_preview_does():
     assert channels.title_with_project("Claude 等你", "") == "Claude 等你"
 
 
+
+
+def test_feishu_card_color_for_auto_answer_is_green():
+    assert channels.feishu._card(
+        _rich(event="auto_answer"))["card"]["header"]["template"] == "green"
+
+
+def test_feishu_card_renders_answer_lines_in_body():
+    body = "Q: Pick one\n→ A（Claude 标记推荐）"
+    card = channels.feishu._card(_rich(event="auto_answer", body=body))
+    content = card["card"]["elements"][0]["text"]["content"]
+    assert "Q: Pick one" in content
+    assert "→ A（Claude 标记推荐）" in content

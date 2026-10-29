@@ -219,3 +219,10 @@ def test_turn_gate_leaves_other_events_alone(tmp_path, monkeypatch):
           "notification_type": "permission_prompt", "message": "approve?"}
     hook_notify.handle(ev, tmp_path, cfg)
     assert [n.body for n in seen] == ["approve?"]
+
+
+def test_pending_records_the_cwd(tmp_path):
+    """The auto-answer record needs the cwd to name the project in Feishu."""
+    hook_pre_tool.handle(_auq_event(), tmp_path, {"channels": {}, "thresholds": {}})
+    pend = state.load_all(tmp_path)
+    assert pend[0].cwd == "/var/www/demo"
