@@ -9,7 +9,7 @@
       "name": "cc-autopilot-notify",
       "source": "./",
       "description": "Feishu/terminal/toast notifications plus unattended auto-answer",
-      "version": "0.2.5",
+      "version": "0.2.6",
       "category": "productivity",
       "tags": ["notification", "auto-answer", "hooks"]
     }
