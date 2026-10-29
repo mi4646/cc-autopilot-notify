@@ -200,6 +200,14 @@ def test_notify_dedupe_seconds_default_and_validation(tmp_path):
     _assert_config_error(tmp_path, {"notify": {"dedupe_seconds": True}})
 
 
+def test_notification_message_translations_load_and_validate(tmp_path):
+    translations = {"Claude is waiting for your input": "Claude 正在等待您的输入"}
+    cfg = _load(tmp_path, {"notify": {"message_translations": translations}})
+    assert config.notification_message_translations(cfg) == translations
+    _assert_config_error(tmp_path, {"notify": {"message_translations": []}})
+    _assert_config_error(tmp_path, {"notify": {"message_translations": {"message": 1}}})
+
+
 def _at(hour, minute):
     return datetime.datetime(2026, 10, 27, hour, minute).timestamp()
 

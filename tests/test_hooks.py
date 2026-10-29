@@ -67,8 +67,24 @@ def test_idle_prompt_notification_is_forwarded(tmp_path, monkeypatch):
     ev = {"hook_event_name": "Notification", "session_id": "s1",
           "notification_type": "idle_prompt",
           "message": "Claude is waiting for your input"}
-    assert hook_notify.handle(ev, tmp_path, {"channels": {}}) == 0
-    assert [n.title for n in seen] == ["Claude 等你"]
+    cfg = {"channels": {}, "notify": {"message_translations": {
+        "Claude is waiting for your input": "Claude 正在等待您的输入",
+    }}}
+    assert hook_notify.handle(ev, tmp_path, cfg) == 0
+    assert [(n.title, n.body) for n in seen] == [
+        ("Claude 等你", "Claude 正在等待您的输入"),
+    ]
+
+
+def test_unmapped_notification_message_keeps_original_text(tmp_path, monkeypatch):
+    seen = _capture(monkeypatch)
+    ev = {"hook_event_name": "Notification", "session_id": "s1",
+          "notification_type": "permission_prompt", "message": "approve?"}
+    cfg = {"channels": {}, "notify": {"message_translations": {
+        "Claude is waiting for your input": "Claude 正在等待您的输入",
+    }}}
+    hook_notify.handle(ev, tmp_path, cfg)
+    assert [n.body for n in seen] == ["approve?"]
 
 
 def test_unlisted_notification_types_are_dropped(tmp_path, monkeypatch):

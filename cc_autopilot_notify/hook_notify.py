@@ -96,7 +96,8 @@ def handle(event: dict, root: Path, cfg: dict) -> int:
         if kind not in _ALLOWED:
             log.debug("notify: ignoring notification_type %r", kind)
             return 0
-        body = str(event.get("message") or event.get("title") or "")[:300]
+        body = str(event.get("message") or event.get("title") or "")
+        body = config.notification_message_translations(cfg).get(body, body)[:300]
         _send(event, root, cfg, kind=kind,
               title=_TITLES.get(kind, "Claude 通知"), body=body,
               quiet=kind in _QUIET_SUPPRESSIBLE)

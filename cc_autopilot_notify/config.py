@@ -38,7 +38,7 @@ DEFAULTS: dict = {
     },
     "path_b": {"enabled": False},
     "daemon": {"enabled": True},
-    "notify": {"dedupe_seconds": 300},
+    "notify": {"dedupe_seconds": 300, "message_translations": {}},
     "quiet_hours": {"enabled": False, "start": "00:00", "end": "09:00"},
     "min_duration_seconds": 30,
 }
@@ -157,6 +157,13 @@ def _validate(cfg: dict) -> None:
     if not _is_int(dedupe) or dedupe < 0:
         raise ConfigError(
             f"notify.dedupe_seconds must be a non-negative integer, got {dedupe!r}")
+    translations = notify.get("message_translations")
+    if not isinstance(translations, dict) or not all(
+            isinstance(source, str) and isinstance(target, str)
+            for source, target in translations.items()):
+        raise ConfigError(
+            "notify.message_translations must be an object of string pairs, "
+            f"got {translations!r}")
 
     if not _is_int(cfg.get("min_duration_seconds")) or cfg["min_duration_seconds"] < 0:
         raise ConfigError(
@@ -257,6 +264,11 @@ def judge_model(cfg: dict) -> str | None:
 def notify_dedupe_seconds(cfg: dict) -> int:
     """Suppress an identical notification repeated within this many seconds."""
     return int(_section(cfg, "notify").get("dedupe_seconds", 300))
+
+
+def notification_message_translations(cfg: dict) -> dict[str, str]:
+    translations = _section(cfg, "notify").get("message_translations")
+    return translations if isinstance(translations, dict) else {}
 
 
 def in_quiet_hours(cfg: dict, now: float | None = None) -> bool:

@@ -39,6 +39,8 @@ typing in another window keeps system idle at zero, so the timer does not run.
   and background-completion notifications are dropped.
 - An identical notification is suppressed for `notify.dedupe_seconds`
   (default 300).
+- `notify.message_translations` can replace exact notification messages before
+  they are sent, for example `{"Claude is waiting for your input": "Claude 正在等待您的输入"}`.
 - `quiet_hours` silences `idle_prompt` inside the window; approval and error
   notifications still get through.
 
