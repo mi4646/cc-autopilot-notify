@@ -1,7 +1,7 @@
 {
   "name": "cc-autopilot-notify",
   "description": "Notifications and unattended auto-answer for Claude Code on WSL with the Pebrel terminal",
-  "version": "0.2.6",
+  "version": "0.3.0",
   "author": {"name": "mi4646"},
   "repository": "https://github.com/mi4646/cc-autopilot-notify",
   "license": "MIT",
