@@ -141,5 +141,14 @@ bash tests/test_install_merge.sh
   been observed yet; only `prompt: null` has. An unrecognised shape raises
   instead of guessing, because a silently wrong answer is worse than none.
 
+## Acknowledgements
+
+Notification design owes a lot to
+[MarioZZJ/cc-notify-hooks](https://github.com/MarioZZJ/cc-notify-hooks) (MIT):
+tiered notification, project-name titles, the duration gate, quiet hours, and
+`clear_pending` (withdraw a notification once the human is back). The channels
+were rewritten rather than reused — its bash + jq scripts cannot express
+"degrade loudly, never block a turn".
+
 Design spec: `docs/superpowers/specs/2026-10-27-cc-autopilot-notify-design.md`
 Implementation plan: `docs/superpowers/plans/2026-10-27-cc-autopilot-notify.md`
