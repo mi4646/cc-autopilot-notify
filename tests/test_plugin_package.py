@@ -38,8 +38,8 @@ def test_marketplace_version_matches_the_plugin():
 
 def test_hooks_use_quoted_plugin_root_and_exist():
     hooks = _json("hooks/hooks.json")["hooks"]
-    for event in ("PreToolUse", "PostToolUse", "Notification", "Stop",
-                  "StopFailure", "PermissionRequest", "SessionStart"):
+    for event in ("PreToolUse", "PostToolUse", "UserPromptSubmit", "Notification",
+                  "Stop", "StopFailure", "PermissionRequest", "SessionStart"):
         assert event in hooks, f"{event} not registered"
     for command in _hook_commands():
         assert "${CLAUDE_PLUGIN_ROOT}" in command, command

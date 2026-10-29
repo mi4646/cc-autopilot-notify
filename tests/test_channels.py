@@ -86,3 +86,19 @@ def test_feishu_card_color_follows_event():
         _rich(event="StopFailure"))["card"]["header"]["template"] == "red"
 
 
+def test_feishu_card_ends_with_a_timestamp_note():
+    import datetime
+    import time
+
+    stamp = time.mktime(datetime.datetime(2026, 10, 29, 12, 34, 56).timetuple())
+    note = channels.feishu._card(_rich(created_at=stamp))["card"]["elements"][-1]
+    assert note["tag"] == "note"
+    assert note["elements"][0]["content"] == "2026-10-29 12:34:56"
+
+
+def test_title_carries_the_project_so_the_preview_does():
+    assert channels.title_with_project("Claude 等你", "/var/www/demo") == \
+        "demo · Claude 等你"
+    assert channels.title_with_project("Claude 等你", "") == "Claude 等你"
+
+

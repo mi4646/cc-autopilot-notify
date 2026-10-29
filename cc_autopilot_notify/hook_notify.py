@@ -52,11 +52,44 @@ def _seen_key(session_id: str, kind: str, body: str) -> str:
     return hashlib.sha1(raw).hexdigest()
 
 
+def _format_duration(seconds: int) -> str:
+    if seconds < 60:
+        return f"{seconds}s"
+    if seconds < 3600:
+        return f"{seconds // 60}m{seconds % 60:02d}s"
+    return f"{seconds // 3600}h{(seconds % 3600) // 60:02d}m"
+
+
+def _with_turn_duration(event: dict, root: Path, cfg: dict, kind: str,
+                        body: str) -> str | None:
+    """Append the turn's duration, or return None to suppress a short turn.
+
+    The start is written by UserPromptSubmit and read-and-cleared here. A
+    missing start fails open: a session that began before this plugin was
+    installed must not silently lose its completion notification.
+    """
+    threshold = config.notify_min_turn_seconds(cfg)
+    if kind != "idle_prompt" or threshold <= 0:
+        return body
+    start = state.pop_turn_start(event.get("session_id") or "", root)
+    if start is None:
+        return body
+    elapsed = max(0, int(time.time() - start))
+    if elapsed < threshold:
+        log.debug("notify: idle_prompt after %ss < %ss", elapsed, threshold)
+        return None
+    return f"{body} · 耗时 {_format_duration(elapsed)}"
+
+
 def _send(event: dict, root: Path, cfg: dict, *, kind: str, title: str,
           body: str, quiet: bool) -> None:
     if quiet and config.in_quiet_hours(cfg):
         log.debug("notify: %s suppressed by quiet hours", kind)
         return
+    body = _with_turn_duration(event, root, cfg, kind, body)
+    if body is None:
+        return
+    title = channels.title_with_project(title, event.get("cwd") or "")
     window = config.notify_dedupe_seconds(cfg)
     if window > 0:
         key = _seen_key(event.get("session_id") or "", kind, body)
@@ -78,6 +111,15 @@ def _send(event: dict, root: Path, cfg: dict, *, kind: str, title: str,
 
 def handle(event: dict, root: Path, cfg: dict) -> int:
     name = event.get("hook_event_name") or ""
+
+    if name == "UserPromptSubmit":
+        session_id = event.get("session_id") or ""
+        if session_id:
+            try:
+                state.mark_turn_start(session_id, root, time.time())
+            except OSError as exc:
+                log.warning("notify: cannot record turn start (%s)", exc)
+        return 0
 
     if name == "PostToolUse" and event.get("tool_name") == TOOL:
         session_id = event.get("session_id") or ""

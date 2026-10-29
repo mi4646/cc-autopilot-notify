@@ -156,3 +156,66 @@ def test_post_tool_use_clears_pending(tmp_path):
           "session_id": "s1"}
     assert hook_notify.handle(ev, tmp_path, {"channels": {}}) == 0
     assert state.load_all(tmp_path) == []
+
+
+def _idle_prompt(cwd=None):
+    ev = {"hook_event_name": "Notification", "session_id": "s1",
+          "notification_type": "idle_prompt", "message": "waiting"}
+    if cwd:
+        ev["cwd"] = cwd
+    return ev
+
+
+def test_title_names_the_project(tmp_path, monkeypatch):
+    seen = _capture(monkeypatch)
+    hook_notify.handle(_idle_prompt(cwd="/var/www/demo"), tmp_path, {"channels": {}})
+    assert [n.title for n in seen] == ["demo · Claude 等你"]
+
+
+def test_question_title_names_the_project(tmp_path, monkeypatch):
+    seen = _capture(monkeypatch)
+    hook_pre_tool.handle(_auq_event(), tmp_path, {"channels": {}, "thresholds": {}})
+    assert seen[0].title == "demo · Claude 在等你回答"
+
+
+def test_user_prompt_submit_records_the_turn_start(tmp_path):
+    ev = {"hook_event_name": "UserPromptSubmit", "session_id": "s1"}
+    assert hook_notify.handle(ev, tmp_path, {"channels": {}}) == 0
+    assert state.pop_turn_start("s1", tmp_path) is not None
+
+
+def test_short_turn_is_not_notified_when_a_threshold_is_set(tmp_path, monkeypatch):
+    seen = _capture(monkeypatch)
+    cfg = {"channels": {}, "notify": {"min_turn_seconds": 60}}
+    hook_notify.handle({"hook_event_name": "UserPromptSubmit", "session_id": "s1"},
+                       tmp_path, cfg)
+    hook_notify.handle(_idle_prompt(), tmp_path, cfg)
+    assert seen == []
+
+
+def test_long_turn_reports_its_duration(tmp_path, monkeypatch):
+    import time
+
+    seen = _capture(monkeypatch)
+    state.mark_turn_start("s1", tmp_path, time.time() - 125)
+    cfg = {"channels": {}, "notify": {"min_turn_seconds": 60}}
+    hook_notify.handle(_idle_prompt(), tmp_path, cfg)
+    assert [n.body for n in seen] == ["waiting · 耗时 2m05s"]
+
+
+def test_turn_gate_fails_open_without_a_recorded_start(tmp_path, monkeypatch):
+    """A session that started before this plugin must not lose its notification."""
+    seen = _capture(monkeypatch)
+    cfg = {"channels": {}, "notify": {"min_turn_seconds": 60}}
+    hook_notify.handle(_idle_prompt(), tmp_path, cfg)
+    assert len(seen) == 1
+
+
+def test_turn_gate_leaves_other_events_alone(tmp_path, monkeypatch):
+    seen = _capture(monkeypatch)
+    cfg = {"channels": {}, "notify": {"min_turn_seconds": 60}}
+    state.mark_turn_start("s1", tmp_path, 0)
+    ev = {"hook_event_name": "Notification", "session_id": "s1",
+          "notification_type": "permission_prompt", "message": "approve?"}
+    hook_notify.handle(ev, tmp_path, cfg)
+    assert [n.body for n in seen] == ["approve?"]

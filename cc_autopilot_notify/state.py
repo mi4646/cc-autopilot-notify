@@ -203,3 +203,46 @@ def mark_seen(root: Path, key: str, now: float) -> None:
                 if isinstance(v, (int, float)) and v >= cutoff}
         data[key] = float(now)
         _atomic_write(path, data)
+
+
+_TURN_START = "turn_start.json"
+
+
+def mark_turn_start(session_id: str, root: Path, now: float) -> None:
+    """Remember when the current turn began, for the min_turn_seconds gate."""
+    root = Path(root)
+    with _locked(root):
+        path = root / _TURN_START
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            data = {}
+        if not isinstance(data, dict):
+            data = {}
+        cutoff = now - 86400
+        data = {k: v for k, v in data.items()
+                if isinstance(v, (int, float)) and not isinstance(v, bool)
+                and v >= cutoff}
+        data[_sanitise(session_id)] = float(now)
+        _atomic_write(path, data)
+
+
+def pop_turn_start(session_id: str, root: Path) -> float | None:
+    """Read and clear the turn start, so a stale value cannot gate the next turn."""
+    root = Path(root)
+    with _locked(root):
+        path = root / _TURN_START
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        if not isinstance(data, dict):
+            return None
+        value = data.pop(_sanitise(session_id), None)
+        try:
+            _atomic_write(path, data)
+        except OSError:
+            pass
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value)

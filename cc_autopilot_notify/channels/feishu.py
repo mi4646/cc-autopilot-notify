@@ -9,8 +9,11 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 import urllib.error
 import urllib.request
+
+from ..project import project_name
 
 log = logging.getLogger(__name__)
 
@@ -52,21 +55,18 @@ _COLORS = {
 }
 
 
-def _project_name(value: str) -> str:
-    """A cwd becomes the last path segment, matching cc-notify-hooks."""
-    value = (value or "").strip()
-    if not value:
-        return "unknown"
-    return value.replace("\\", "/").rstrip("/").rsplit("/", 1)[-1] or value
-
-
 def _field(label: str, value: str) -> dict:
     return {"is_short": True,
             "text": {"tag": "lark_md", "content": f"**{label}**\n{value}"}}
 
 
+def _timestamp(created_at: float) -> str:
+    return time.strftime("%Y-%m-%d %H:%M:%S",
+                         time.localtime(created_at or time.time()))
+
+
 def _card(n) -> dict:
-    fields = [_field("项目", _project_name(n.project)),
+    fields = [_field("项目", project_name(n.project)),
               _field("事件", n.event or "unknown")]
     if n.question_count > 0:
         fields.append(_field("问题数", str(n.question_count)))
@@ -83,6 +83,8 @@ def _card(n) -> dict:
             "elements": [
                 {"tag": "div", "text": {"tag": "lark_md", "content": n.body}},
                 {"tag": "div", "fields": fields},
+                {"tag": "note", "elements": [
+                    {"tag": "plain_text", "content": _timestamp(n.created_at)}]},
             ],
         },
     }

@@ -38,7 +38,8 @@ DEFAULTS: dict = {
     },
     "path_b": {"enabled": False},
     "daemon": {"enabled": True},
-    "notify": {"dedupe_seconds": 300, "message_translations": {}},
+    "notify": {"dedupe_seconds": 300, "message_translations": {},
+               "min_turn_seconds": 0},
     "quiet_hours": {"enabled": False, "start": "00:00", "end": "09:00"},
     "min_duration_seconds": 30,
 }
@@ -164,6 +165,11 @@ def _validate(cfg: dict) -> None:
         raise ConfigError(
             "notify.message_translations must be an object of string pairs, "
             f"got {translations!r}")
+    min_turn = notify.get("min_turn_seconds")
+    if not _is_int(min_turn) or min_turn < 0:
+        raise ConfigError(
+            "notify.min_turn_seconds must be a non-negative integer, "
+            f"got {min_turn!r}")
 
     if not _is_int(cfg.get("min_duration_seconds")) or cfg["min_duration_seconds"] < 0:
         raise ConfigError(
@@ -271,11 +277,17 @@ def notification_message_translations(cfg: dict) -> dict[str, str]:
     return translations if isinstance(translations, dict) else {}
 
 
+def notify_min_turn_seconds(cfg: dict) -> int:
+    """Suppress `idle_prompt` for turns shorter than this. 0 disables the gate."""
+    return int(_section(cfg, "notify").get("min_turn_seconds", 0))
+
+
 def in_quiet_hours(cfg: dict, now: float | None = None) -> bool:
     """True when local time falls inside the configured quiet window.
 
-    Windows may wrap midnight (start > end). A start equal to end means the
-    whole day, matching the usual cron-style reading.
+    Windows may wrap midnight (start > end). Bounds that are equal, malformed
+    or missing allow the notification: a mistyped window must cost at most an
+    extra alert, never a whole day of silence.
     """
     quiet = _section(cfg, "quiet_hours")
     if quiet.get("enabled") is not True:
@@ -288,11 +300,15 @@ def in_quiet_hours(cfg: dict, now: float | None = None) -> bool:
         eh, em = (int(part) for part in end.split(":"))
     except ValueError:
         return False
+    # 25:00 parses as an int but is not a time; letting it through would turn a
+    # typo into a silent window that covers most of the day.
+    if not (0 <= sh <= 23 and 0 <= sm <= 59 and 0 <= eh <= 23 and 0 <= em <= 59):
+        return False
     clock = time.localtime(time.time() if now is None else now)
     minutes = clock.tm_hour * 60 + clock.tm_min
     start_min, end_min = sh * 60 + sm, eh * 60 + em
     if start_min == end_min:
-        return True
+        return False
     if start_min < end_min:
         return start_min <= minutes < end_min
     return minutes >= start_min or minutes < end_min

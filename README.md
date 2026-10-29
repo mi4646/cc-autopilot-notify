@@ -28,12 +28,20 @@ typing in another window keeps system idle at zero, so the timer does not run.
 ### Notification policy
 
 - **Questions** notify immediately (`PreToolUse` on `AskUserQuestion`).
+- Titles read `project · event`; the project comes from the session's cwd, with
+  worktrees resolved to their repository root and the home directory shown as
+  `~` (`~/a/b/…/last` for deep paths).
 - Feishu cards show the project basename, event, question count, option labels
-  and a short session id; the header color follows the event.
+  and a short session id; the header color follows the event, and a timestamp
+  sits in the card's footer.
 - **"Claude finished"** uses Claude Code's own `idle_prompt` notification: it
   fires about 60 s after Claude stops, only if you have not typed and no
   background agent is still running. `Stop` itself fires every turn, so it is
   deliberately silent; `StopFailure` still notifies.
+- `notify.min_turn_seconds` (default 0, off) drops `idle_prompt` for turns
+  shorter than that; a turn that passes the gate reports its duration
+  (`耗时 2m05s`). The start time is written on `UserPromptSubmit` and cleared
+  when read.
 - Only notifications that need a human are forwarded: `idle_prompt`,
   `permission_prompt`, `agent_needs_input`, and elicitation dialogs. Progress
   and background-completion notifications are dropped.
@@ -42,7 +50,9 @@ typing in another window keeps system idle at zero, so the timer does not run.
 - `notify.message_translations` can replace exact notification messages before
   they are sent, for example `{"Claude is waiting for your input": "Claude 正在等待您的输入"}`.
 - `quiet_hours` silences `idle_prompt` inside the window; approval and error
-  notifications still get through.
+  notifications still get through. `start > end` wraps midnight, and equal or
+  malformed bounds allow everything — a mistyped window never costs a day of
+  alerts.
 
 ## Install (plugin)
 

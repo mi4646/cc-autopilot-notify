@@ -11,11 +11,12 @@ import dataclasses
 import logging
 
 from .. import config as _config
+from ..project import project_name
 from . import feishu
 
 log = logging.getLogger(__name__)
 
-__all__ = ["Notification", "send_all", "feishu"]
+__all__ = ["Notification", "send_all", "feishu", "title_with_project"]
 
 
 @dataclasses.dataclass
@@ -27,6 +28,18 @@ class Notification:
     event: str = ""
     question_count: int = 0
     options: list[str] = dataclasses.field(default_factory=list)
+    created_at: float = 0.0
+
+
+def title_with_project(title: str, cwd: str) -> str:
+    """Prefix the event title with the project name when the cwd is known.
+
+    The notification centre shows the title alone, so the project has to be in
+    it; an empty cwd adds "unknown · " noise and is left out.
+    """
+    if not (cwd or "").strip():
+        return title
+    return f"{project_name(cwd)} · {title}"
 
 
 # Fixed order: the cheapest channel first, so a slow network channel cannot

@@ -208,6 +208,14 @@ def test_notification_message_translations_load_and_validate(tmp_path):
     _assert_config_error(tmp_path, {"notify": {"message_translations": {"message": 1}}})
 
 
+def test_notify_min_turn_seconds_default_and_validation(tmp_path):
+    assert config.notify_min_turn_seconds(config.load(tmp_path / "absent.json")) == 0
+    assert config.notify_min_turn_seconds(
+        _load(tmp_path, {"notify": {"min_turn_seconds": 60}})) == 60
+    _assert_config_error(tmp_path, {"notify": {"min_turn_seconds": -1}})
+    _assert_config_error(tmp_path, {"notify": {"min_turn_seconds": True}})
+
+
 def _at(hour, minute):
     return datetime.datetime(2026, 10, 27, hour, minute).timestamp()
 
@@ -229,3 +237,16 @@ def test_quiet_hours_overnight_window():
 def test_quiet_hours_disabled():
     cfg = {"quiet_hours": {"enabled": False, "start": "00:00", "end": "23:59"}}
     assert config.in_quiet_hours(cfg, now=_at(12, 0)) is False
+
+
+def test_quiet_hours_equal_bounds_allow_rather_than_silence():
+    """An unset/mistyped window must not cost the user a whole day of alerts."""
+    cfg = {"quiet_hours": {"enabled": True, "start": "00:00", "end": "00:00"}}
+    assert config.in_quiet_hours(cfg, now=_at(3, 0)) is False
+    assert config.in_quiet_hours(cfg, now=_at(23, 0)) is False
+
+
+def test_quiet_hours_invalid_bounds_allow():
+    for start, end in (("9am", "17:00"), ("25:00", "17:00"), (None, "17:00")):
+        cfg = {"quiet_hours": {"enabled": True, "start": start, "end": end}}
+        assert config.in_quiet_hours(cfg, now=_at(3, 0)) is False

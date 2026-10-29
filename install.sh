@@ -78,6 +78,7 @@ def add(event, module, matcher, timeout=10):
 
 add("PreToolUse", "pre_tool", "AskUserQuestion")
 add("PostToolUse", "notify", "AskUserQuestion")
+add("UserPromptSubmit", "notify", "")
 add("Notification", "notify", "")
 add("Stop", "notify", "")
 add("StopFailure", "notify", "")

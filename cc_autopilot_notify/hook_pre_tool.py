@@ -66,7 +66,8 @@ def handle(event: dict, root: Path, cfg: dict) -> int:
 
     channels.send_all(
         channels.Notification(
-            title="Claude 在等你回答",
+            title=channels.title_with_project("Claude 在等你回答",
+                                              event.get("cwd") or ""),
             body=body,
             project=event.get("cwd") or "",
             session_id=session_id,

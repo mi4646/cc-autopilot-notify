@@ -10,6 +10,11 @@
         {"type": "command", "timeout": 10,
          "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/cc_autopilot_notify/run_hook.py\" notify"}]}
     ],
+    "UserPromptSubmit": [
+      {"matcher": "*", "hooks": [
+        {"type": "command", "timeout": 10,
+         "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/cc_autopilot_notify/run_hook.py\" notify"}]}
+    ],
     "Notification": [
       {"matcher": "*", "hooks": [
         {"type": "command", "timeout": 10,
