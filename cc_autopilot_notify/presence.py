@@ -31,9 +31,29 @@ _SCRIPT = (
     "(Get-Process -Id $p -ErrorAction SilentlyContinue).ProcessName"
 )
 
-# One PowerShell launch returns both facts: "<process name>|<idle seconds>".
-# "ERR" means GetLastInputInfo failed; the caller must not treat it as an
-# idle value. InvariantCulture keeps the decimal separator stable.
+# One PowerShell launch returns three facts: "<process name>|<idle seconds>|<locked>".
+# "ERR" means the field failed; the caller must not treat it as a value.
+# InvariantCulture keeps the decimal separator stable. `locked` comes from
+# WTS QuerySessionInformation(WTSSessionInfoEx) on the console session:
+# SessionFlags 0=LOCKED, 1=UNLOCKED, anything else (incl. 0xFFFFFFFF UNKNOWN)
+# reports ERR — callers treat that as "not locked" and stand down.
+_WTS_SCRIPT = (
+    "Add-Type -Namespace W -Name S -MemberDefinition '"
+    '[DllImport(\"wtsapi32.dll\")] public static extern bool WTSQuerySessionInformation('
+    'System.IntPtr hServer, int sessionId, int infoClass, '
+    'out System.IntPtr ppBuffer, out int pBytesReturned);'
+    '[DllImport(\"wtsapi32.dll\")] public static extern void WTSFreeMemory(System.IntPtr pMemory);'
+    '[DllImport(\"kernel32.dll\")] public static extern int WTSGetActiveConsoleSessionId();'
+    "';"
+    "$locked=\"ERR\";"
+    "$csid=[W.S]::WTSGetActiveConsoleSessionId();"
+    "$buf=[System.IntPtr]::Zero;$n=0;"
+    "if ([W.S]::WTSQuerySessionInformation([System.IntPtr]::Zero,$csid,25,[ref]$buf,[ref]$n)) {"
+    "$flags=[System.Runtime.InteropServices.Marshal]::ReadInt32($buf,16);"
+    "[void][W.S]::WTSFreeMemory($buf);"
+    "if ($flags -eq 0) { $locked=\"0\" } elseif ($flags -eq 1) { $locked=\"1\" }"
+    "};"
+)
 SAMPLE_SCRIPT = (
     "Add-Type -Namespace W -Name I -MemberDefinition '"
     '[DllImport(\"user32.dll\")] public static extern System.IntPtr GetForegroundWindow();'
@@ -55,7 +75,8 @@ SAMPLE_SCRIPT = (
     '$idle=[string]::Format([Globalization.CultureInfo]::InvariantCulture,'
     '"{0:F3}",$delta/1000.0)'
     "};"
-    '"$name|$idle"'
+    + _WTS_SCRIPT +
+    '"$name|$idle|$locked"'
 )
 
 MAX_IDLE_SECONDS = 604800.0
@@ -65,6 +86,7 @@ MAX_IDLE_SECONDS = 604800.0
 class Presence:
     foreground: bool | None
     idle_seconds: float | None
+    locked: bool | None = None
 
 
 def _run_ps(script: str, timeout: float, powershell: str | None = None) -> str:
@@ -78,9 +100,32 @@ def _run_ps(script: str, timeout: float, powershell: str | None = None) -> str:
     return (result.stdout or "").strip()
 
 
+def _parse_sample(raw: str) -> tuple[str, float | None, bool | None]:
+    """Split one "name|idle|locked" line. Any unreadable field is None."""
+    lines = [line for line in raw.splitlines() if line.strip()]
+    if len(lines) != 1 or "|" not in lines[0]:
+        return "", None, None
+    parts = lines[0].split("|")
+    name = parts[0].strip().lower()
+    idle_raw = parts[1].strip() if len(parts) > 1 else "ERR"
+    locked_raw = parts[2].strip() if len(parts) > 2 else ""
+
+    idle = None
+    if idle_raw != "ERR":
+        try:
+            value = float(idle_raw)
+        except ValueError:
+            value = None
+        if value is not None and 0.0 <= value < MAX_IDLE_SECONDS:
+            idle = value
+
+    locked = {"0": False, "1": True}.get(locked_raw)
+    return name, idle, locked
+
+
 def sample(powershell: str | None = None,
            timeout: float = 1.5) -> Presence | None:
-    """Foreground ownership and system idle time from one PowerShell call.
+    """Foreground ownership, idle time and lock state from one PowerShell call.
 
     Returns None when PowerShell is unusable or the output has the wrong
     shape. A field the script could not read is None on the Presence.
@@ -91,24 +136,11 @@ def sample(powershell: str | None = None,
         log.debug("presence: sample failed (%s)", exc)
         return None
 
-    lines = [line for line in raw.splitlines() if line.strip()]
-    if len(lines) != 1 or "|" not in lines[0]:
+    name, idle, locked = _parse_sample(raw)
+    if not name and idle is None and locked is None:
         return None
-    name, idle_raw = lines[0].split("|", 1)
-
-    name = name.strip().lower()
     foreground = None if not name else name == PROCESS_NAME
-
-    idle = None
-    if idle_raw.strip() != "ERR":
-        try:
-            value = float(idle_raw.strip())
-        except ValueError:
-            value = None
-        if value is not None and 0.0 <= value < MAX_IDLE_SECONDS:
-            idle = value
-
-    return Presence(foreground=foreground, idle_seconds=idle)
+    return Presence(foreground=foreground, idle_seconds=idle, locked=locked)
 
 
 

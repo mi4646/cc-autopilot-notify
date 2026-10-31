@@ -132,3 +132,22 @@ def test_sample_script_is_single_call_and_culture_safe(monkeypatch):
     assert "InvariantCulture" in seen[0][0]
     assert "GetForegroundWindow" in seen[0][0]
     assert "GetLastInputInfo" in seen[0][0]
+
+
+def test_parse_sample_three_fields():
+    assert presence._parse_sample("pebrel|12.5|1") == ("pebrel", 12.5, True)
+    assert presence._parse_sample("LockApp|71.0|0") == ("lockapp", 71.0, False)
+    assert presence._parse_sample("pebrel|12.5|ERR") == ("pebrel", 12.5, None)
+    assert presence._parse_sample("pebrel|12.5") == ("pebrel", 12.5, None)
+    assert presence._parse_sample("pebrel|12.5|junk") == ("pebrel", 12.5, None)
+
+
+def test_sample_carries_locked(monkeypatch):
+    monkeypatch.setattr(presence, "_run_ps", lambda *a, **k: "LockApp|71.0|0")
+    p = presence.sample()
+    assert p.foreground is False and p.idle_seconds == 71.0 and p.locked is False
+
+
+def test_sample_missing_field_locked_is_none(monkeypatch):
+    monkeypatch.setattr(presence, "_run_ps", lambda *a, **k: "pebrel|12.5")
+    assert presence.sample().locked is None
