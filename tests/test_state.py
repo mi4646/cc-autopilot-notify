@@ -110,3 +110,59 @@ def test_heartbeat_age_keeps_working_for_normal_values(tmp_path):
     (tmp_path / "heartbeat.json").write_text('{"at": 100.5}')
     assert state.heartbeat_age(tmp_path, now=101.0) == 0.5
 
+
+
+def _bare(sid):
+    return state.Pending(session_id=sid, window_id=1, pane_id=2, questions=[],
+                         appeared_at=1.0, last_activity=1.0)
+
+
+def test_old_record_loads_with_defaults(tmp_path):
+    (tmp_path / "pending_s1.json").write_text(
+        '{"session_id":"s1","window_id":1,"pane_id":2,"questions":[],'
+        '"appeared_at":1.0,"last_activity":1.0}')
+    p = state.load_all(tmp_path)[0]
+    assert p.finished_at is None and p.continue_count == 0
+    assert p.failure_count == 0 and p.finished_failed is False
+    assert p.last_auto_submit is None and p.pressed_at is None
+    assert p.stage_card_sent is False
+
+
+def test_set_finished_keeps_counts_and_clears_markers(tmp_path):
+    state.record(_bare("s1"), tmp_path)
+    state.bump_continue("s1", tmp_path, failed=False)
+    state.mark_stage_card("s1", tmp_path, when=50.0)
+    state.mark_pressed("s1", tmp_path, when=51.0)
+    state.set_finished("s1", tmp_path, when=100.0, pane_id=2, failed=False)
+    p = state.load_all(tmp_path)[0]
+    assert p.finished_at == 100.0 and p.continue_count == 1
+    assert p.stage_card_sent is False and p.pressed_at is None
+    assert p.finished_failed is False and p.pane_id == 2
+
+
+def test_clear_finished_zeroes_counts(tmp_path):
+    state.record(_bare("s1"), tmp_path)
+    state.bump_continue("s1", tmp_path, failed=False)
+    state.bump_continue("s1", tmp_path, failed=True)
+    state.clear_finished("s1", tmp_path)
+    p = state.load_all(tmp_path)[0]
+    assert p.finished_at is None
+    assert p.continue_count == 0 and p.failure_count == 0
+
+
+def test_mark_auto_submit_and_bump_failed(tmp_path):
+    state.record(_bare("s1"), tmp_path)
+    state.mark_auto_submit("s1", tmp_path, when=7.0)
+    n = state.bump_continue("s1", tmp_path, failed=True)
+    p = state.load_all(tmp_path)[0]
+    assert n == 1 and p.failure_count == 1 and p.continue_count == 0
+    assert p.last_auto_submit == 7.0
+
+
+def test_purge_stale_drops_old_records(tmp_path):
+    state.record(_bare("old"), tmp_path)
+    state.record(_bare("new"), tmp_path)
+    state.touch("new", tmp_path, when=99900.0)
+    state.purge_stale(tmp_path, now=100000.0)
+    names = [p.session_id for p in state.load_all(tmp_path)]
+    assert "new" in names and "old" not in names

@@ -36,6 +36,14 @@ class Pending:
     revision: str | None = None
     choose_failures: int = 0
     cwd: str = ""
+    # autopilot-continue (spec 2026-10-31 §3.3); defaults keep old records loading
+    finished_at: float | None = None
+    finished_failed: bool = False
+    continue_count: int = 0
+    failure_count: int = 0
+    last_auto_submit: float | None = None
+    pressed_at: float | None = None
+    stage_card_sent: bool = False
 
 
 def _sanitise(session_id: str) -> str:
@@ -135,6 +143,81 @@ def bump_choose_failures(session_id: str, root: Path) -> int:
 
     _mutate(session_id, root, change)
     return counter["n"]
+
+
+def set_finished(session_id: str, root: Path, when: float, pane_id: int,
+                 *, failed: bool = False, window_id: int = 0,
+                 cwd: str = "") -> None:
+    """Mark the session's turn ended (Stop/StopFailure). Upserts: a session
+    that never asked a question has no record yet, but its continuation still
+    starts here. Counts survive; per-segment markers reset."""
+
+    def change(p: Pending) -> None:
+        p.finished_at = when
+        p.finished_failed = failed
+        p.stage_card_sent = False
+        p.pressed_at = None
+        if pane_id:
+            p.pane_id = pane_id
+        if window_id:
+            p.window_id = window_id
+        if cwd:
+            p.cwd = cwd
+
+    with _locked(root):
+        path = _record_path(session_id, root)
+        try:
+            pending = Pending(**json.loads(path.read_text(encoding="utf-8")))
+        except (OSError, ValueError, TypeError):
+            pending = Pending(session_id=session_id, window_id=window_id,
+                              pane_id=pane_id, questions=[],
+                              appeared_at=when, last_activity=when, cwd=cwd)
+        change(pending)
+        _atomic_write(path, dataclasses.asdict(pending))
+
+
+def clear_finished(session_id: str, root: Path) -> None:
+    """Human-initiated prompt: the round restarts from zero (spec D3)."""
+    _mutate(session_id, root, lambda p: (
+        setattr(p, "finished_at", None), setattr(p, "finished_failed", False),
+        setattr(p, "continue_count", 0), setattr(p, "failure_count", 0)))
+
+
+def mark_auto_submit(session_id: str, root: Path, when: float) -> None:
+    """Written BEFORE pressing Enter, so the hook can tell our own submit."""
+    _mutate(session_id, root, lambda p: setattr(p, "last_auto_submit", when))
+
+
+def bump_continue(session_id: str, root: Path, *, failed: bool) -> int:
+    counter = {"n": 0}
+
+    def change(p: Pending) -> None:
+        if failed:
+            p.failure_count += 1
+        else:
+            p.continue_count += 1
+        counter["n"] = p.failure_count if failed else p.continue_count
+
+    _mutate(session_id, root, change)
+    return counter["n"]
+
+
+def mark_pressed(session_id: str, root: Path, when: float) -> None:
+    _mutate(session_id, root, lambda p: setattr(p, "pressed_at", when))
+
+
+def mark_stage_card(session_id: str, root: Path, when: float) -> None:
+    _mutate(session_id, root, lambda p: setattr(p, "stage_card_sent", True))
+
+
+def purge_stale(root: Path, now: float, max_age_seconds: float = 86400.0) -> None:
+    """Drop records idle past the max age; a dead session must not linger."""
+    root = Path(root)
+    if not root.is_dir():
+        return
+    for pending in load_all(root):
+        if now - pending.last_activity > max_age_seconds:
+            forget(pending.session_id, root)
 
 
 def write_heartbeat(root: Path, when: float, *, pid: int | None = None,
