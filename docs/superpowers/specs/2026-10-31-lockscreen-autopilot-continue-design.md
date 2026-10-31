@@ -50,7 +50,7 @@ spike 产物记入 `docs/spikes/`，附可复算口径。
 
 ### 3.2 建议条检测（continuation.py；勘误 2026-10-31：D1 已定匹配知识集中 continuation.py，原 screen.py 标题作废）
 
-依 R2 spike 结论落成 `screen.match_suggestion(text: str) -> str | None`：有建议返回建议文本，无则 None。识别不了的形态一律 None。规则以**正向结构断言**为主（codex 复核 #13：末行匹配建议条形态 + 输入区空闲），§2 R3 的干扰提示黑名单只作辅助排除。
+依 R2 spike 结论落成 `continuation.match_suggestion(text: str) -> str | None`：有建议返回建议文本，无则 None。识别不了的形态一律 None。规则以**正向结构断言**为主（codex 复核 #13：末行匹配建议条形态 + 输入区空闲），§2 R3 的干扰提示黑名单只作辅助排除。
 
 ### 3.3 触发与状态机（hook_notify.py + daemon.py + state.py）
 
@@ -127,7 +127,7 @@ pytest 全绿 + `python -m pytest tests/ -q` 为证明命令。
 1. R1/R2 spike（可并行）→ 任何一项失败即重开设计，不写产品代码
 2. config（`autopilot` 节）——状态机依赖它，先于第 5 步（勘误 2026-10-31）
 3. presence 锁屏字段 + doctor 检查行
-4. `screen.match_suggestion` + 单测
+4. `continuation.match_suggestion` + 单测
 5. state 字段 + Stop/UserPromptSubmit hook 扩展
 6. daemon 续跑状态机 + 单测
 7. 通知文案

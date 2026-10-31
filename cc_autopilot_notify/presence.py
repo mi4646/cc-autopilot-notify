@@ -49,9 +49,12 @@ _WTS_SCRIPT = (
     "$csid=[W.S]::WTSGetActiveConsoleSessionId();"
     "$buf=[System.IntPtr]::Zero;$n=0;"
     "if ([W.S]::WTSQuerySessionInformation([System.IntPtr]::Zero,$csid,25,[ref]$buf,[ref]$n)) {"
+    "$qsid=[System.Runtime.InteropServices.Marshal]::ReadInt32($buf,8);"
+    "if ($qsid -eq $csid) {"
     "$flags=[System.Runtime.InteropServices.Marshal]::ReadInt32($buf,16);"
-    "[void][W.S]::WTSFreeMemory($buf);"
     "if ($flags -eq 0) { $locked=\"0\" } elseif ($flags -eq 1) { $locked=\"1\" }"
+    "};"
+    "[void][W.S]::WTSFreeMemory($buf);"
     "};"
 )
 SAMPLE_SCRIPT = (

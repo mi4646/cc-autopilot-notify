@@ -27,7 +27,18 @@ _SEP_RE = re.compile("─{10,}")
 PRESS_STEP_SECONDS = 0.3
 PRESSED_SETTLE_SECONDS = 15.0
 STAGE_WAIT_MARGIN_SECONDS = 30.0
-AUTO_SUBMIT_WINDOW_SECONDS = 10.0
+AUTO_SUBMIT_WINDOW_SECONDS = 10.0  # must match hook_notify's window; see spec §3.3
+
+# Per-session watch of the current input box. A suggestion appears whole
+# between ticks; a draft grows keystroke by keystroke. A keypress is allowed
+# only after we saw the box EMPTY and the text has been stable for two
+# consecutive ticks — a draft that appeared whole in one tick and then paused
+# is the residual hole (logged per press for audit; capped per round).
+_INPUT_WATCH: dict[str, dict] = {}
+
+# capped notice is once per finished segment, tracked in memory: a daemon
+# restart may re-send one capped card, which is harmless.
+_CAPPED_SENT: dict[str, float] = {}
 
 
 def match_suggestion(text: str) -> str | None:
@@ -35,8 +46,8 @@ def match_suggestion(text: str) -> str | None:
     if not text:
         return None
     parts = _SEP_RE.split(text)
-    if len(parts) < 2:
-        return None
+    if len(parts) < 3:
+        return None  # a complete pane tail is history|input|status; less is a cut
     for line in parts[-2].splitlines():
         stripped = line.lstrip()
         if not stripped.startswith("❯"):
@@ -44,6 +55,26 @@ def match_suggestion(text: str) -> str | None:
         suggestion = stripped[1:].strip()
         return suggestion or None
     return None
+
+
+def _input_area(text: str) -> str | None:
+    parts = _SEP_RE.split(text) if text else []
+    return parts[-2] if len(parts) >= 2 else None
+
+
+def _watch_input(sid: str, text: str) -> dict:
+    """Track the box across ticks; a keypress needs an empty→text transition."""
+    watch = _INPUT_WATCH.get(sid)
+    if watch is None:
+        _INPUT_WATCH[sid] = {"text": text, "stable": 1, "saw_empty": text == ""}
+        return _INPUT_WATCH[sid]
+    if text == "":
+        watch.update(text="", stable=0, saw_empty=True)
+    elif watch["text"] == text:
+        watch["stable"] += 1
+    else:
+        watch.update(text=text, stable=1)
+    return watch
 
 
 def _stage_deadline(pending: state.Pending, cfg: dict) -> float:
@@ -55,6 +86,7 @@ def _stage_deadline(pending: state.Pending, cfg: dict) -> float:
 class ContinueDeps:
     read: Callable[[state.Pending], dict]
     press: Callable[[state.Pending, str, int], dict]
+    cached_presence: Callable[[], "presence.Presence | None"]
     fresh_presence: Callable[[], "presence.Presence | None"]
     pane_owner_ok: Callable[[state.Pending], bool]
     notify: Callable[[object], None]
@@ -90,9 +122,9 @@ def handle(pending: state.Pending, now: float, root: Path, cfg: dict,
     if not config.continue_enabled(cfg):
         return []
 
-    fresh = deps.fresh_presence()
-    if fresh is None or fresh.locked is not True:
-        return []
+    cached = deps.cached_presence()
+    if cached is not None and cached.locked is not True:
+        return []  # cheap gate: sample says the user is present
 
     try:
         reading = deps.read(pending)
@@ -102,8 +134,10 @@ def handle(pending: state.Pending, now: float, root: Path, cfg: dict,
     if pending.questions or reading.get("state") != "finished":
         return []  # an open question outranks continuation; a running turn is not ours
 
-    suggestion = match_suggestion(str(reading.get("text") or ""))
+    text = str(reading.get("text") or "")
+    suggestion = match_suggestion(text)
     shadow = config.shadow_mode(cfg)
+    watch = _watch_input(pending.session_id, suggestion or "")
 
     if suggestion and shadow:
         log.info("continuation: SHADOW would press tab+enter for %s: %s",
@@ -114,10 +148,11 @@ def handle(pending: state.Pending, now: float, root: Path, cfg: dict,
         return []
 
     if not suggestion:
-        if "tab" in str(reading.get("text") or "").lower():
-            state.bump_canary(root, now)
         if (not pending.stage_card_sent and pending.finished_at is not None
                 and now >= _stage_deadline(pending, cfg)):
+            area = _input_area(text) or ""
+            if "tab" in area.lower():
+                state.bump_canary(root, now)
             state.mark_stage_card(pending.session_id, root, now)
             deps.notify(_card(pending, now, "continue_stage", "续跑告一段落",
                               f"本次共自动续跑 {pending.continue_count} 条，无更多建议"))
@@ -130,14 +165,20 @@ def handle(pending: state.Pending, now: float, root: Path, cfg: dict,
         return []  # UI may not have caught up; never double-press
     if not deps.pane_owner_ok(pending):
         return []
+    if not (watch["saw_empty"] and watch["stable"] >= 2):
+        return []  # a draft grows between ticks; only a whole, stable text is a suggestion
+
+    fresh = deps.fresh_presence()
+    if fresh is None or fresh.locked is not True:
+        return []  # the cached lock may be up to 5s stale; re-confirm at press time
 
     cap = config.failure_continues(cfg) if pending.finished_failed \
         else config.max_continues(cfg)
     used = pending.failure_count if pending.finished_failed \
         else pending.continue_count
     if used >= cap:
-        if not pending.stage_card_sent:
-            state.mark_stage_card(pending.session_id, root, now)
+        if _CAPPED_SENT.get(pending.session_id) != pending.finished_at:
+            _CAPPED_SENT[pending.session_id] = pending.finished_at or 0.0
             deps.notify(_card(pending, now, "continue_capped", "续跑已达上限",
                               f"已自动执行 {used} 条，剩余建议留待主人处理"))
             return [f"{pending.session_id}: continuation cap reached ({used}/{cap})"]
@@ -148,8 +189,6 @@ def handle(pending: state.Pending, now: float, root: Path, cfg: dict,
     # state alone (codex Critical #1).
     state.mark_auto_submit(pending.session_id, root, now)
     state.mark_pressed(pending.session_id, root, now)
-    count = state.bump_continue(pending.session_id, root,
-                                failed=pending.finished_failed)
     try:
         _press_or_raise(pending, "tab", 1, deps)
         deps.sleep(PRESS_STEP_SECONDS)
@@ -164,6 +203,8 @@ def handle(pending: state.Pending, now: float, root: Path, cfg: dict,
                 body=f"{pending.session_id}: 续跑按键连续被拒，放弃本轮，留待主人处理"))
         return []
 
+    count = state.bump_continue(pending.session_id, root,
+                                failed=pending.finished_failed)
     label = f"失败重试 {count}/{cap}" if pending.finished_failed \
         else f"第 {count} 次 / 上限 {cap}"
     title = f"自动续跑（失败重试）{count}/{cap}" if pending.finished_failed \

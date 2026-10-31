@@ -1,5 +1,7 @@
 import re
 
+import pytest
+
 from cc_autopilot_notify import presence, continuation as continue_
 
 
@@ -38,6 +40,16 @@ import dataclasses
 from cc_autopilot_notify import continuation, state
 
 
+@pytest.fixture(autouse=True)
+def _reset_watch():
+    """The input watch is per-process global; tests must not inherit it."""
+    continuation._INPUT_WATCH.clear()
+    continuation._CAPPED_SENT.clear()
+    yield
+    continuation._INPUT_WATCH.clear()
+    continuation._CAPPED_SENT.clear()
+
+
 def _pending(sid="s1", **over):
     p = state.Pending(session_id=sid, window_id=1, pane_id=2, questions=[],
                       appeared_at=1.0, last_activity=1.0, finished_at=100.0)
@@ -62,6 +74,8 @@ def _deps(suggestion=True, locked=True, state_name="finished", presses=None,
     class D:
         read = staticmethod(do_read)
         press = staticmethod(do_press)
+        cached_presence = staticmethod(lambda: presence.Presence(
+            foreground=False, idle_seconds=500.0, locked=locked))
         fresh_presence = staticmethod(lambda: presence.Presence(
             foreground=False, idle_seconds=500.0, locked=locked))
         pane_owner_ok = staticmethod(lambda pending: owner_ok)
@@ -112,15 +126,16 @@ def test_running_state_is_skipped(tmp_path):
 
 def test_locked_suggestion_presses_tab_then_enter_and_counts(tmp_path):
     state.record(_pending(), tmp_path)
-    deps, presses, notified = _deps()
-    out = _run(_pending(), deps, tmp=tmp_path)
-    assert presses == [("tab", 1), ("enter", 1)]
+    deps, presses, notified, _ = _counting_deps(
+        [_pane_tail(""), _pane_tail("生成一下周报"), _pane_tail("生成一下周报")])
+    for i in range(3):  # tick1 空（建立过渡），tick2 出现，tick3 稳定→按键
+        _run(state.load_all(tmp_path)[0], deps, now=500.0 + i, tmp=tmp_path)
+    assert presses == ["tab", "enter"]
     p = state.load_all(tmp_path)[0]
     assert p.continue_count == 1 and p.last_auto_submit is not None
     assert p.pressed_at is not None
-    card = notified[0]
-    assert card.event == "auto_continue" and "自动续跑 1/10" in card.title
-    assert "生成一下周报" in card.body
+    card = [n for n in notified if n.event == "auto_continue"][0]
+    assert "自动续跑 1/10" in card.title and "生成一下周报" in card.body
 
 
 def test_press_failure_before_marker_keeps_no_count(tmp_path, monkeypatch):
@@ -130,22 +145,24 @@ def test_press_failure_before_marker_keeps_no_count(tmp_path, monkeypatch):
     order = []
     monkeypatch.setattr(cont.state, "mark_auto_submit",
                         lambda *a, **k: order.append("mark"))
-    deps, presses, notified = _deps()
+    deps, presses, notified, _ = _counting_deps(
+        [_pane_tail(""), _pane_tail("生成一下周报"), _pane_tail("生成一下周报")])
     orig_press = deps.press
     deps.press = lambda pending, key, repeat: (order.append(f"press:{key}"),
                                                orig_press(pending, key, repeat))[1]
-    _run(_pending(), deps, tmp=tmp_path)
+    for i in range(3):
+        _run(state.load_all(tmp_path)[0], deps, now=500.0 + i, tmp=tmp_path)
     assert order == ["mark", "press:tab", "press:enter"]
 
 
 def test_cap_stops_with_single_capped_card(tmp_path):
     state.record(_pending(continue_count=10), tmp_path)
-    deps, presses, notified = _deps()
-    out = _run(_pending(continue_count=10), deps, tmp=tmp_path)
+    deps, presses, notified, _ = _counting_deps(
+        [_pane_tail(""), _pane_tail("生成一下周报"), _pane_tail("生成一下周报")])
+    for i in range(3):
+        _run(state.load_all(tmp_path)[0], deps, now=500.0 + i, tmp=tmp_path)
     assert presses == []
-    assert notified and notified[0].event == "continue_capped"
-    out2 = _run(state.load_all(tmp_path)[0], deps, tmp=tmp_path)  # 下一个 tick 重载记录
-    assert len(notified) == 1  # 不重发
+    assert len([n for n in notified if n.event == "continue_capped"]) == 1
 
 
 def test_stage_card_once_after_deadline(tmp_path):
@@ -172,14 +189,146 @@ def test_shadow_mode_logs_without_pressing(tmp_path):
 
 def test_press_refused_twice_gives_up(tmp_path):
     state.record(_pending(), tmp_path)
-
-    def boom(pending, key, repeat):
-        raise RuntimeError("refused")
-
-    deps, presses, notified = _deps()
-    deps.press = boom
-    _run(_pending(), deps, tmp=tmp_path)
-    _run(_pending(), deps, tmp=tmp_path)
+    deps, presses, notified, _ = _counting_deps(
+        [_pane_tail(""), _pane_tail("生成一下周报"), _pane_tail("生成一下周报"),
+         _pane_tail("生成一下周报")], press_fails=True)
+    for i in range(4):  # 16s 间隔越过 settle 窗；两次注入尝试都被拒
+        _run(state.load_all(tmp_path)[0], deps, now=500.0 + i * 16, tmp=tmp_path)
     p = state.load_all(tmp_path)[0]
     assert p.finished_at is None  # 放弃：回合状态清零
-    assert notified and "放弃" in notified[-1].body or notified[-1].title
+    assert notified and any("放弃" in n.body for n in notified)
+
+
+def _counting_deps(suggestion_texts, locked=True, owner=True, press_fails=False):
+    """deps whose read() yields successive texts; counts fresh_presence calls."""
+    seq = list(suggestion_texts)
+    fresh_calls, presses, notified = [], [], []
+
+    def do_read(pending):
+        text = seq.pop(0) if seq else (seq_texts[-1] if seq_texts else "")
+        return {"state": "finished", "text": text}
+
+    seq_texts = suggestion_texts
+
+    def do_press(pending, key, repeat):
+        if press_fails:
+            raise RuntimeError("refused")
+        presses.append(key)
+        return {"ok": True}
+
+    class D:
+        read = staticmethod(do_read)
+        press = staticmethod(do_press)
+        fresh_presence = staticmethod(lambda: (fresh_calls.append(1),
+            presence.Presence(False, 500.0, locked))[1])
+        cached_presence = staticmethod(lambda: presence.Presence(
+            False, 500.0, locked))
+        pane_owner_ok = staticmethod(lambda pending: owner)
+        notify = staticmethod(lambda n: notified.append(n))
+        sleep = staticmethod(lambda s: None)
+    return D(), presses, notified, fresh_calls
+
+
+def test_draft_growing_never_presses(tmp_path):
+    state.record(_pending(), tmp_path)
+    deps, presses, _, _ = _counting_deps(["❯草稿", _pane_tail("推"), _pane_tail("推到"), _pane_tail("推到远")])
+    for i in range(4):
+        _run(_pending(), deps, now=500.0 + i, tmp=tmp_path)
+    assert presses == []
+
+
+def test_suggestion_after_empty_transition_presses_once(tmp_path):
+    state.record(_pending(), tmp_path)
+    deps, presses, _, _ = _counting_deps(
+        [_pane_tail(""), _pane_tail("生成一下周报"), _pane_tail("生成一下周报")])
+    for i in range(3):
+        _run(_pending(), deps, now=500.0 + i, tmp=tmp_path)
+    assert presses == ["tab", "enter"]  # 第 3 tick：空→出现→稳定
+
+
+def test_unknown_first_sighting_never_presses(tmp_path):
+    state.record(_pending(), tmp_path)
+    deps, presses, _, _ = _counting_deps(
+        [_pane_tail("生成一下周报")] * 4)  # daemon 重启即见非空，无空过渡
+    for i in range(4):
+        _run(_pending(), deps, now=500.0 + i, tmp=tmp_path)
+    assert presses == []
+
+
+def test_fresh_presence_only_before_press(tmp_path):
+    state.record(_pending(), tmp_path)
+    deps, presses, _, fresh = _counting_deps([_pane_tail(""), _pane_tail("生成一下周报"), _pane_tail("生成一下周报")])
+    for i in range(3):
+        _run(_pending(), deps, now=500.0 + i, tmp=tmp_path)
+    assert len(fresh) == 1  # 只有按键那个 tick 强采
+
+
+def test_locked_none_zero_press(tmp_path):
+    state.record(_pending(), tmp_path)
+    deps, presses, _, _ = _counting_deps([_pane_tail("生成一下周报")], locked=None)
+    _run(_pending(), deps, tmp=tmp_path)
+    assert presses == []
+
+
+def test_owner_false_no_press(tmp_path):
+    state.record(_pending(), tmp_path)
+    deps, presses, _, _ = _counting_deps([_pane_tail(""), _pane_tail("生成一下周报"), _pane_tail("生成一下周报")], owner=False)
+    for i in range(3):
+        _run(_pending(), deps, now=500.0 + i, tmp=tmp_path)
+    assert presses == []
+
+
+def test_failure_cap_stops_with_card(tmp_path):
+    state.record(_pending(finished_failed=True, failure_count=2), tmp_path)
+    deps, presses, notified, _ = _counting_deps(
+        [_pane_tail(""), _pane_tail("重试吧"), _pane_tail("重试吧")])
+    for i in range(3):
+        _run(_pending(finished_failed=True, failure_count=2), deps, now=500.0 + i, tmp=tmp_path)
+    assert presses == []
+    assert any(n.event == "continue_capped" for n in notified)
+
+
+def test_canary_once_per_segment_on_blind_tab_hint(tmp_path):
+    state.record(_pending(), tmp_path)
+    sep = "─" * 60
+    blind = f"done\n{sep}\n❯ \n  ⏵⏵ tab to use: 生成一下周报\n{sep}\n  status\n"
+    deps, presses, notified, _ = _counting_deps([blind, blind])
+    _run(state.load_all(tmp_path)[0], deps, now=500.0, tmp=tmp_path)
+    _run(state.load_all(tmp_path)[0], deps, now=501.0, tmp=tmp_path)
+    assert notified and notified[0].event == "continue_stage"
+    assert state.read_canary(tmp_path, when=500.0) == 1  # 每段一次
+
+
+def test_interference_tails_match_none():
+    assert continuation.match_suggestion(
+        _pane_tail("") + "  ! tab to toggle mcp\n") is None
+    sep = "─" * 60
+    perm = f"Allow Bash?\n{sep}\n❯ \n{sep}\n  Yes / No\n"
+    assert continuation.match_suggestion(perm) is None
+
+
+def test_single_separator_fails_closed():
+    assert continuation.match_suggestion("历史 ❯ 旧提示\n" + "─" * 60 + "\n❯ 生成一下周报") is None
+
+
+def test_press_refused_does_not_consume_cap(tmp_path):
+    state.record(_pending(), tmp_path)
+    deps, presses, notified, _ = _counting_deps(
+        [_pane_tail(""), _pane_tail("生成一下周报"), _pane_tail("生成一下周报")],
+        press_fails=True)
+    for i in range(3):
+        _run(_pending(), deps, now=500.0 + i, tmp=tmp_path)
+    p = state.load_all(tmp_path)[0]
+    assert p.continue_count == 0  # 注入失败不占预算（spec 机制 7）
+
+
+def test_give_up_assertion_is_real(tmp_path):
+    state.record(_pending(), tmp_path)
+    deps, presses, notified, _ = _counting_deps(
+        [_pane_tail(""), _pane_tail("生成一下周报"), _pane_tail("生成一下周报"),
+         _pane_tail("生成一下周报")], press_fails=True)
+    for i in range(4):  # 16s 间隔越过 settle 窗；两次注入尝试都被拒
+        _run(state.load_all(tmp_path)[0], deps, now=500.0 + i * 16, tmp=tmp_path)
+    p = state.load_all(tmp_path)[0]
+    assert p.finished_at is None
+    assert notified and any("放弃" in n.body for n in notified)

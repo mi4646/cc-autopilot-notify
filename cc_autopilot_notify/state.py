@@ -177,6 +177,31 @@ def set_finished(session_id: str, root: Path, when: float, pane_id: int,
         _atomic_write(path, dataclasses.asdict(pending))
 
 
+def record_questions(session_id: str, root: Path, *, pane_id: int,
+                     questions: list[dict], cwd: str = "") -> None:
+    """Upsert the open-question panel without touching continuation state:
+    an AskUserQuestion inside an auto-continued round must not reset the cap
+    (eng review I2)."""
+    def change(p: Pending) -> None:
+        p.questions = questions
+        if pane_id:
+            p.pane_id = pane_id
+        if cwd:
+            p.cwd = cwd
+
+    with _locked(root):
+        path = _record_path(session_id, root)
+        try:
+            pending = Pending(**json.loads(path.read_text(encoding="utf-8")))
+        except (OSError, ValueError, TypeError):
+            pending = Pending(session_id=session_id, window_id=0,
+                              pane_id=pane_id, questions=questions,
+                              appeared_at=time.time(), last_activity=time.time(),
+                              cwd=cwd)
+        change(pending)
+        _atomic_write(path, dataclasses.asdict(pending))
+
+
 def clear_finished(session_id: str, root: Path) -> None:
     """Human-initiated prompt: the round restarts from zero (spec D3)."""
     _mutate(session_id, root, lambda p: (

@@ -274,3 +274,15 @@ def test_prompt_within_auto_submit_window_keeps_state(tmp_path, monkeypatch):
                         "session_id": "s1"}, tmp_path, _cfg())
     p = state.load_all(tmp_path)[0]
     assert p.continue_count == 1 and p.finished_at == 100.0  # 未清
+
+
+def test_auq_record_preserves_continuation_state(tmp_path):
+    """I2: 面板记录更新不得清掉续跑计数与 finished 标记（D3 护栏）。"""
+    state.record(_bare("s1"), tmp_path)
+    state.bump_continue("s1", tmp_path, failed=False)
+    state.set_finished("s1", tmp_path, when=100.0, pane_id=2)
+    rc = hook_pre_tool.handle(_auq_event(), tmp_path, {"channels": {}, "thresholds": {}})
+    assert rc == 0
+    p = state.load_all(tmp_path)[0]
+    assert p.continue_count == 1 and p.finished_at == 100.0
+    assert p.questions and p.questions[0].get("question") == "Q"  # 面板内容已更新

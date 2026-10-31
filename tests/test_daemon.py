@@ -634,9 +634,15 @@ def test_tick_continues_finished_record(tmp_path):
                                last_activity=_time.time() - 500.0,
                                finished_at=_time.time() - 500.0), tmp_path)
     presses, notified = [], []
+    calls = []
+
+    def do_read(pending):
+        calls.append(1)
+        text = "" if len(calls) == 1 else "─" * 60 + "\n❯ 生成一下周报\n" + "─" * 60
+        return {"state": "finished", "text": text}
+
     deps = daemon.Deps(
-        read=lambda pending: {"state": "finished",
-                              "text": "─" * 60 + "\n❯ 生成一下周报\n" + "─" * 60},
+        read=do_read,
         press=lambda pending, key, repeat: presses.append(key) or {"ok": True},
         sample=lambda: Presence(foreground=False, idle_seconds=900.0,
                                 locked=True),
@@ -645,15 +651,20 @@ def test_tick_continues_finished_record(tmp_path):
         locate=lambda sid: (1, 2),
         judge_multi_fn=lambda q: None,
         sleep=lambda s: None,
+        agents=lambda: [{"pane_id": 2, "agent": {"session_id": "s1"}}],
     )
     cfg = {"channels": {}, "thresholds": {}, "min_duration_seconds": 0,
            "autopilot": {"continue_enabled": True, "shadow_mode": False,
                          "max_continues": 10, "suggest_wait_seconds": 90,
                          "failure_continues": 2}}
-    actions = daemon.tick(_time.time(), tmp_path, cfg, deps)
+    base = _time.time()
+    actions = []
+    for i in range(3):  # 空→出现→稳定：第三 tick 才允许按键（C1 草稿门）
+        actions.extend(daemon.tick(base + i, tmp_path, cfg, deps))
     assert presses == ["tab", "enter"]
     assert any("auto-continued" in a for a in actions)
-    assert notified and notified[0].event == "auto_continue"
+    card = [n for n in notified if n.event == "auto_continue"][0]  # tick1 会先发阶段卡
+    assert "自动续跑 1/10" in card.title
 
 
 def test_tick_unlocked_never_presses(tmp_path):
@@ -674,10 +685,36 @@ def test_tick_unlocked_never_presses(tmp_path):
         locate=lambda sid: (1, 2),
         judge_multi_fn=lambda q: None,
         sleep=lambda s: None,
+        agents=lambda: [{"pane_id": 2, "agent": {"session_id": "s1"}}],
     )
     cfg = {"channels": {}, "thresholds": {}, "min_duration_seconds": 0,
            "autopilot": {"continue_enabled": True, "shadow_mode": False,
                          "max_continues": 10, "suggest_wait_seconds": 90,
                          "failure_continues": 2}}
-    daemon.tick(_time.time(), tmp_path, cfg, deps)
+    base = _time.time()
+    for i in range(3):
+        daemon.tick(base + i, tmp_path, cfg, deps)
     assert presses == []
+
+
+def test_continue_owner_ok_via_pane_snapshot(tmp_path):
+    """I4: agent-start 会话在 agents.list 里 session_id=None——按 pane 查归属，
+    None 视为本会话（与应答路径同一容忍），session 不同才拒绝。"""
+    pending = state.Pending(session_id="s1", window_id=1, pane_id=2,
+                            questions=[], appeared_at=1.0, last_activity=1.0)
+    deps = daemon.Deps(
+        read=lambda p: {}, press=lambda p, k, r: {"ok": True},
+        sample=lambda: None, judge_fn=lambda q: None, notify=lambda n: None,
+        locate=lambda sid: None,  # agent-start 会话 locate 必 None
+        judge_multi_fn=lambda q: None, sleep=lambda s: None,
+        agents=lambda: [{"pane_id": 2, "agent": {"session_id": None}}])
+    ok = daemon._continue_deps(deps, daemon.PresenceGate(), 1.0).pane_owner_ok
+    assert ok(pending) is True
+    deps2 = daemon.Deps(
+        read=lambda p: {}, press=lambda p, k, r: {"ok": True},
+        sample=lambda: None, judge_fn=lambda q: None, notify=lambda n: None,
+        locate=lambda sid: None, judge_multi_fn=lambda q: None,
+        sleep=lambda s: None,
+        agents=lambda: [{"pane_id": 2, "agent": {"session_id": "other"}}])
+    ok2 = daemon._continue_deps(deps2, daemon.PresenceGate(), 1.0).pane_owner_ok
+    assert ok2(pending) is False

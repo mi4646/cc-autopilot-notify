@@ -22,7 +22,7 @@ import sys
 import time
 from pathlib import Path
 
-from . import channels, config, hook_common, state
+from . import channels, config, continuation, hook_common, state
 
 log = logging.getLogger(__name__)
 
@@ -141,7 +141,8 @@ def _human_or_own_prompt(session_id: str, root: Path) -> None:
         if pending.session_id != session_id:
             continue
         mark = pending.last_auto_submit
-        if mark is not None and 0 <= time.time() - mark < 10:
+        if mark is not None and 0 <= time.time() - mark < \
+                continuation.AUTO_SUBMIT_WINDOW_SECONDS:
             return
         state.clear_finished(session_id, root)
         return

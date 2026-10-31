@@ -46,17 +46,10 @@ def handle(event: dict, root: Path, cfg: dict) -> int:
         pane_id = int(os.environ.get("PEBREL_PANE_ID") or 0)
     except ValueError:
         pane_id = 0
-    pending = state.Pending(
-        session_id=session_id,
-        window_id=0,
-        pane_id=pane_id,
-        questions=questions,
-        appeared_at=now,
-        last_activity=now,
-        cwd=event.get("cwd") or "",
-    )
     try:
-        state.record(pending, root)
+        state.record_questions(session_id, root, pane_id=pane_id,
+                               questions=questions,
+                               cwd=event.get("cwd") or "")
     except OSError as exc:
         log.warning("hook_pre_tool: cannot record pending (%s)", exc)
 

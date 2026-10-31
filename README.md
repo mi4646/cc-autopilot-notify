@@ -57,6 +57,22 @@ typing in another window keeps system idle at zero, so the timer does not run.
   malformed bounds allow everything — a mistyped window never costs a day of
   alerts.
 
+## Lockscreen autopilot continuation
+
+在「自动应答」之上，本插件还能在**锁屏**时自动执行 Claude Code 输入框的「下一步建议」
+（Tab 填入 + Enter 提交），循环到无建议为止，每会话上限 10 次（失败回合另有 2 次重试预算）。
+逐条发飞书卡留痕；未锁屏时绝不代跑。
+
+默认**关闭**。启用分两步（spec：影子先行）：
+
+```json
+{"autopilot": {"continue_enabled": true, "shadow_mode": true}}
+```
+
+1. `continue_enabled: true` 且 `shadow_mode: true`（默认）——只记录「会按什么」到 daemon
+   日志，不真按键；过一晚核对日志确认匹配正常；
+2. 确认后 `shadow_mode: false` 开始真跑。随时 `continue_enabled: false` 总闸关闭。
+
 ## Install (plugin)
 
 ```bash

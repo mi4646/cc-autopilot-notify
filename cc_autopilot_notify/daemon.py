@@ -61,6 +61,7 @@ class Deps:
     judge_fn: Callable[[dict], "judge.Decision"]
     notify: Callable[[object], None]  # str or channels.Notification
     locate: Callable[[str], "tuple[int, int] | None"] = lambda sid: None
+    agents: Callable[[], list] = lambda: []
     judge_multi_fn: Callable[[dict], "judge.Decision"] = lambda q: (0,)
     sleep: Callable[[float], None] = time.sleep
 
@@ -287,7 +288,7 @@ def _tick_one(pending: state.Pending, now: float, root: Path, cfg: dict,
 
     if pending.finished_at is not None:
         actions.extend(continuation.handle(
-            pending, now, root, cfg, _continue_deps(deps)))
+            pending, now, root, cfg, _continue_deps(deps, gate, now)))
         return
 
     try:
@@ -384,18 +385,25 @@ def tick(now: float, root: Path, cfg: dict, deps: Deps, *, pid: int | None = Non
     return actions
 
 
-def _continue_deps(deps: Deps) -> "continuation.ContinueDeps":
+def _continue_deps(deps: Deps, gate: "PresenceGate", now: float) -> "continuation.ContinueDeps":
     def owner_ok(pending: state.Pending) -> bool:
         """The record's session must still own the pane we are about to press
-        (codex 复核 #16: panes get reused)."""
+        (codex 复核 #16: panes get reused). Lookup is by pane in the agents
+        snapshot: `locate` matches by session and returns None for agent-start
+        panes, which would kill continuation for exactly the sessions the
+        answering path already tolerates (eng review I4)."""
         try:
-            located = deps.locate(pending.session_id)
+            for agent in deps.agents():
+                if int(agent.get("pane_id", 0)) == pending.pane_id:
+                    info = agent.get("agent") or {}
+                    return info.get("session_id") in (None, pending.session_id)
         except Exception:  # noqa: BLE001 - an outage must not press keys
             return False
-        return located is not None and located[1] == pending.pane_id
+        return False
 
     return continuation.ContinueDeps(
         read=deps.read, press=deps.press,
+        cached_presence=lambda: gate.get(now, deps),
         fresh_presence=deps.sample,  # bypasses the 5s gate cache: fresh lock
         pane_owner_ok=owner_ok, notify=deps.notify, sleep=deps.sleep)
 
@@ -412,6 +420,9 @@ def build_deps(appdata: Path, cfg: dict) -> Deps:
     def do_locate(session_id: str):
         return pebrel_runtime.locate(appdata, session_id)
 
+    def do_agents() -> list:
+        return pebrel_runtime.agents(appdata)
+
     def do_judge(question: dict) -> "judge.Decision":
         return judge.pick(question, model=config.judge_model(cfg))
 
@@ -427,7 +438,7 @@ def build_deps(appdata: Path, cfg: dict) -> Deps:
     return Deps(read=do_read, press=do_press,
                 sample=presence.sample,
                 judge_fn=do_judge, judge_multi_fn=do_judge_multi,
-                notify=do_notify, locate=do_locate)
+                notify=do_notify, locate=do_locate, agents=do_agents)
 
 
 def run(root: Path, cfg: dict, appdata: Path | None = None) -> None:
