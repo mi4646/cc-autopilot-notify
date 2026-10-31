@@ -48,7 +48,7 @@ spike 产物记入 `docs/spikes/`，附可复算口径。
 
 > D2（2026-10-31）：弃用 LogonUI 进程启发式——其解锁侧行为无法证伪（解锁后可能常驻 → 永远判「锁屏」，危险方向）；WTS 语义有文档背书且锁定侧已本机验证。锁定/解锁两侧的实测归入 S1 验收。
 
-### 3.2 建议条检测（continue.py；勘误 2026-10-31：D1 已定匹配知识集中 continue.py，原 screen.py 标题作废）
+### 3.2 建议条检测（continuation.py；勘误 2026-10-31：D1 已定匹配知识集中 continuation.py，原 screen.py 标题作废）
 
 依 R2 spike 结论落成 `screen.match_suggestion(text: str) -> str | None`：有建议返回建议文本，无则 None。识别不了的形态一律 None。规则以**正向结构断言**为主（codex 复核 #13：末行匹配建议条形态 + 输入区空闲），§2 R3 的干扰提示黑名单只作辅助排除。
 
@@ -66,7 +66,7 @@ spike 产物记入 `docs/spikes/`，附可复算口径。
 续跑逻辑只处理带 `finished_at` 的记录，与现有 attention 应答路径互斥；`Stop` 每回合都触发，人在场时锁屏门槛天然挡住。
 
 - **按键失败复用现有模式**（评审 A1，2026-10-31）：续跑的 tab/enter 被拒绝时走 daemon 既有 `_PressRefused` 退避路径（daemon.py:124-131），累计 2 次放弃并通知，不另起炉灶。
-- **匹配知识边界**：pane 文本 → 建议的匹配规则只住 continue.py，daemon 不预消化文本（架构评审八红旗②的边界规则）。
+- **匹配知识边界**：pane 文本 → 建议的匹配规则只住 continuation.py，daemon 不预消化文本（架构评审八红旗②的边界规则）。
 
 **Tick 级安全机制**（外部复核 Native fallback 发现 1/2/3/4/6，2026-10-31，均为已批契约的必要实现）：
 
@@ -143,8 +143,8 @@ pytest 全绿 + `python -m pytest tests/ -q` 为证明命令。
 ### 范围记录（Scope Challenge）
 
 - feature answers: 无裁剪提案，范围维持原始四要素（90 秒窗口 / Tab 填入 / Enter 执行 / 无建议收轮）
-- structure: **B — 新建 `cc_autopilot_notify/continue.py`** 集中建议匹配与续跑状态机（D1，陛下选定）；presence 只加 locked 字段，daemon 每秒单点调用
-- accepted scope: 原范围 + continue.py 模块边界；§5 实施顺序不变
+- structure: **B — 新建 `cc_autopilot_notify/continuation.py`** 集中建议匹配与续跑状态机（D1，陛下选定）；presence 只加 locked 字段，daemon 每秒单点调用
+- accepted scope: 原范围 + continuation.py 模块边界；§5 实施顺序不变
 - pending remedies: F1（锁屏检测方式）、F2（后台任务下的收轮语义）
 
 ### F1 → D2: 锁屏检测信号选型
@@ -323,7 +323,7 @@ spike 阶段可并行（R1 ∥ R2，互不依赖）；产品代码依赖 spike �
 | 步骤 | 模块 | 依赖 |
 |---|---|---|
 | spike R1/R2 | tools/ | — |
-| config → presence → continue.py → state/hooks → daemon → doctor | cc_autopilot_notify/ | spike |
+| config → presence → continuation.py → state/hooks → daemon → doctor | cc_autopilot_notify/ | spike |
 | S1–S8 验收 | 真机 | 全部 |
 
 ## Implementation Tasks
@@ -338,9 +338,9 @@ Synthesized from this review's findings. Each task derives from a specific findi
   - Surfaced by: D2（WTS 单信号）；外部复核 #11（config 先行）
   - Files: cc_autopilot_notify/config.py, presence.py, tests/test_config.py, tests/test_presence.py
   - Verify: pytest 解析层用例（三段/缺段/ERR→None）；S1 真机锁/解锁各采一次
-- [ ] **T3 (P1, human: ~1d / CC: ~1h)** — continue.py：match_suggestion + tick 安全机制（last_auto_submit / stage_card_sent / pressed_at / 锁态强采 / 应答优先）
+- [ ] **T3 (P1, human: ~1d / CC: ~1h)** — continuation.py：match_suggestion + tick 安全机制（last_auto_submit / stage_card_sent / pressed_at / 锁态强采 / 应答优先）
   - Surfaced by: D1/D3；外部复核 #1–#4、#6
-  - Files: cc_autopilot_notify/continue.py（新）, tests/test_continue.py（新）
+  - Files: cc_autopilot_notify/continuation.py（新）, tests/test_continuation.py（新）
   - Verify: pytest——未锁屏零按键（S3）、恰好一次按键（S4）、上限停（S5）、90s 阶段卡不重发（S6）、干扰文本不匹配（S7）
 - [ ] **T4 (P1, human: ~4h / CC: ~30min)** — state 字段扩展 + Stop/StopFailure/UserPromptSubmit hook
   - Surfaced by: §3.3；外部复核 #1（hook 端 last_auto_submit 判定）
@@ -365,7 +365,7 @@ Synthesized from this review's findings. Each task derives from a specific findi
 
 ### Completion summary
 
-- Step 0: Scope Challenge — scope accepted as-is（结构定为独立 continue.py，D1）
+- Step 0: Scope Challenge — scope accepted as-is（结构定为独立 continuation.py，D1）
 - Reality rows: 7/7 applicable rows emitted，premise unverified=2（LogonUI 解锁侧、建议条 90s 窗口——均归 spike）
 - Architecture Review: 1 informational（A1 按键失败路径落文）；design-twice 完成，红八旗无违例
 - Code Quality Review: 1 informational（B1 config accessor 模式落文）
@@ -421,7 +421,7 @@ Synthesized from this review's findings. Each task derives from a specific findi
 
 - [ ] **TD1 (P2, human: ~2h / CC: ~15min)** — channels：三个新 event id 进 `_COLORS`/`_TITLES`，四张卡按 §3.5 文案包实现（含 60 字符截断与空建议占位）
   - Surfaced by: Pass 1/2/5/7 — 决策 1/2/3
-  - Files: cc_autopilot_notify/channels/feishu.py, hook_notify.py, continue.py（卡构造调用方）, tests/test_channels.py
+  - Files: cc_autopilot_notify/channels/feishu.py, hook_notify.py, continuation.py（卡构造调用方）, tests/test_channels.py
   - Verify: pytest 文案/色板断言 + `test-channel feishu` 实发四张样卡
 
 ## GSTACK REVIEW REPORT
