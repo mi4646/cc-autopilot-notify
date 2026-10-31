@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
 import sys
 import time
 from pathlib import Path
@@ -109,6 +110,43 @@ def _send(event: dict, root: Path, cfg: dict, *, kind: str, title: str,
     )
 
 
+def _pane_id() -> int:
+    try:
+        return int(os.environ.get("PEBREL_PANE_ID") or 0)
+    except ValueError:
+        return 0
+
+
+def _finished(event: dict, root: Path, *, failed: bool) -> None:
+    session_id = event.get("session_id") or ""
+    if not session_id:
+        return
+    try:
+        state.set_finished(session_id, root, time.time(), _pane_id(),
+                           failed=failed, cwd=str(event.get("cwd") or ""))
+    except OSError as exc:
+        log.warning("notify: cannot record finished turn (%s)", exc)
+
+
+def _human_or_own_prompt(session_id: str, root: Path) -> None:
+    """UserPromptSubmit: clear the finished marker only for a human prompt.
+
+    Our own continuation presses Enter, which fires this hook too; the
+    last_auto_submit marker (written before the press) tells them apart.
+    A marker younger than 10s means our own submit — keep the round state.
+    """
+    if not session_id:
+        return
+    for pending in state.load_all(root):
+        if pending.session_id != session_id:
+            continue
+        mark = pending.last_auto_submit
+        if mark is not None and 0 <= time.time() - mark < 10:
+            return
+        state.clear_finished(session_id, root)
+        return
+
+
 def handle(event: dict, root: Path, cfg: dict) -> int:
     name = event.get("hook_event_name") or ""
 
@@ -117,6 +155,7 @@ def handle(event: dict, root: Path, cfg: dict) -> int:
         if session_id:
             try:
                 state.mark_turn_start(session_id, root, time.time())
+                _human_or_own_prompt(session_id, root)
             except OSError as exc:
                 log.warning("notify: cannot record turn start (%s)", exc)
         return 0
@@ -128,6 +167,7 @@ def handle(event: dict, root: Path, cfg: dict) -> int:
         return 0
 
     if name == "StopFailure":
+        _finished(event, root, failed=True)
         body = str(event.get("error") or "本轮以错误结束")[:300]
         _send(event, root, cfg, kind="StopFailure", title="Claude 失败",
               body=body, quiet=False)
@@ -145,7 +185,9 @@ def handle(event: dict, root: Path, cfg: dict) -> int:
               quiet=kind in _QUIET_SUPPRESSIBLE)
         return 0
 
-    # Stop fires per turn; it is not a completion signal. Nothing to send.
+    # Stop fires per turn; it is not a completion signal. It only marks the
+    # turn ended so the continuation loop knows when to look for suggestions.
+    _finished(event, root, failed=False)
     return 0
 
 

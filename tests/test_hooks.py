@@ -226,3 +226,51 @@ def test_pending_records_the_cwd(tmp_path):
     hook_pre_tool.handle(_auq_event(), tmp_path, {"channels": {}, "thresholds": {}})
     pend = state.load_all(tmp_path)
     assert pend[0].cwd == "/var/www/demo"
+
+
+def _cfg():
+    return {"channels": {"terminal": {"enabled": False}}, "thresholds": {}}
+
+
+def _bare(sid):
+    return state.Pending(session_id=sid, window_id=1, pane_id=2, questions=[],
+                         appeared_at=1.0, last_activity=1.0)
+
+
+def test_stop_marks_finished(tmp_path):
+    rc = hook_notify.handle({"hook_event_name": "Stop", "session_id": "s1",
+                             "cwd": "/var/www/demo"}, tmp_path, _cfg())
+    assert rc == 0
+    p = state.load_all(tmp_path)[0]
+    assert p.finished_at is not None and p.finished_failed is False
+    assert p.cwd == "/var/www/demo"
+
+
+def test_stop_failure_marks_finished_failed(tmp_path, monkeypatch):
+    monkeypatch.setattr("cc_autopilot_notify.channels.send_all", lambda n, c: [])
+    rc = hook_notify.handle({"hook_event_name": "StopFailure", "session_id": "s1",
+                             "error": "boom"}, tmp_path, _cfg())
+    assert rc == 0
+    p = state.load_all(tmp_path)[0]
+    assert p.finished_failed is True and p.finished_at is not None
+
+
+def test_human_prompt_clears_finished(tmp_path):
+    state.record(_bare("s1"), tmp_path)
+    state.set_finished("s1", tmp_path, when=100.0, pane_id=2)
+    hook_notify.handle({"hook_event_name": "UserPromptSubmit",
+                        "session_id": "s1"}, tmp_path, _cfg())
+    p = state.load_all(tmp_path)[0]
+    assert p.finished_at is None and p.continue_count == 0
+
+
+def test_prompt_within_auto_submit_window_keeps_state(tmp_path, monkeypatch):
+    state.record(_bare("s1"), tmp_path)
+    state.set_finished("s1", tmp_path, when=100.0, pane_id=2)
+    state.bump_continue("s1", tmp_path, failed=False)
+    monkeypatch.setattr(hook_notify.time, "time", lambda: 103.0)
+    state.mark_auto_submit("s1", tmp_path, when=102.5)
+    hook_notify.handle({"hook_event_name": "UserPromptSubmit",
+                        "session_id": "s1"}, tmp_path, _cfg())
+    p = state.load_all(tmp_path)[0]
+    assert p.continue_count == 1 and p.finished_at == 100.0  # 未清
