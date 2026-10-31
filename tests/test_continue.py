@@ -1,6 +1,6 @@
 import re
 
-from cc_autopilot_notify import continue_
+from cc_autopilot_notify import continuation as continue_
 
 
 def _pane_tail(current_input: str) -> str:
