@@ -17,7 +17,8 @@ AFK_MS=300000
 command -v python3 >/dev/null || { echo "python3 is required" >&2; exit 1; }
 
 if [ ! -f "$SETTINGS" ]; then
-  echo "note: $SETTINGS does not exist; a fresh one will be created"
+  # stdout carries the projected settings in dry-run mode; keep it parseable.
+  echo "note: $SETTINGS does not exist; a fresh one will be created" >&2
 fi
 
 # Projected settings go to stdout; nothing is written in dry-run mode.
@@ -25,7 +26,7 @@ PROJECTED=$(mktemp)
 trap 'rm -f "$PROJECTED"' EXIT
 
 python3 - "$SETTINGS" "$REPO" "$AFK_MS" > "$PROJECTED" <<'PY'
-import json, os, sys
+import json, os, shlex, sys
 
 settings_path, repo, afk_ms = sys.argv[1], sys.argv[2], int(sys.argv[3])
 setting = os.environ.get("CC_AUTOPILOT_DRY_RUN") != "1"
@@ -61,10 +62,12 @@ hooks = data.setdefault("hooks", {})
 
 def entry(module, matcher, timeout=10):
     # PYTHONPATH is set explicitly: a hook is launched by path from an arbitrary
-    # cwd, so the package is not importable without it.
+    # cwd, so the package is not importable without it. Quote both paths: a
+    # checkout under a directory with spaces must still yield one argv token.
     return {"matcher": matcher,
             "hooks": [{"type": "command",
-                       "command": f"PYTHONPATH={repo} python3 {runner} {module}",
+                       "command": (f"PYTHONPATH={shlex.quote(repo)} "
+                                   f"python3 {shlex.quote(runner)} {module}"),
                        "timeout": timeout}]}
 
 def add(event, module, matcher, timeout=10):
@@ -72,8 +75,14 @@ def add(event, module, matcher, timeout=10):
     ours = entry(module, matcher, timeout)
     for item in bucket:
         for h in item.get("hooks", []):
-            if "run_hook.py" in str(h.get("command", "")) and module in str(h.get("command", "")):
-                return  # already installed
+            command = str(h.get("command", ""))
+            # Only our own runner counts. Another project's run_hook.py is not
+            # evidence that this hook is installed, and a stale checkout path
+            # must be refreshed rather than skipped.
+            if ("cc_autopilot_notify" in command and "run_hook.py" in command
+                    and command.endswith(" " + module)):
+                h.update(ours["hooks"][0])
+                return
     bucket.append(ours)
 
 add("PreToolUse", "pre_tool", "AskUserQuestion")
@@ -113,13 +122,18 @@ if [ -f "$CONFIG" ]; then
   cp "$CONFIG" "$CONFIG.bak-$STAMP"
   echo "backed up config to $CONFIG.bak-$STAMP"
 fi
+CONFIG_EXISTED=0
+[ -f "$CONFIG" ] && CONFIG_EXISTED=1
 PYTHONPATH="$REPO" python3 -c "
-import json, sys
+import sys
 from cc_autopilot_notify import config
-json.dump(config.DEFAULTS, open(sys.argv[1], 'w', encoding='utf-8'),
-          ensure_ascii=False, indent=2)
+config.write_default(sys.argv[1])
 " "$CONFIG" || { echo "error: could not write $CONFIG" >&2; exit 1; }
-echo "wrote $CONFIG"
+if [ "$CONFIG_EXISTED" = "1" ]; then
+  echo "kept existing $CONFIG"
+else
+  echo "wrote $CONFIG"
+fi
 
 # systemd user unit: Pebrel is a Windows process, so it cannot host this.
 mkdir -p "$(dirname "$UNIT")"
@@ -133,8 +147,8 @@ Type=simple
 ExecStart=$(command -v python3) -m cc_autopilot_notify.cli daemon
 Restart=on-failure
 RestartSec=5
-WorkingDirectory=$REPO
-Environment=PYTHONPATH=$REPO
+WorkingDirectory="$REPO"
+Environment="PYTHONPATH=$REPO"
 
 [Install]
 WantedBy=default.target

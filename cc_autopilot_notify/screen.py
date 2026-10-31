@@ -17,6 +17,9 @@ _ROW = re.compile(r"^\s*(?:❯)?\s*(\d+)[.．、]\s*(.+?)\s*$")
 _DECOR = re.compile(r"\s*[（(](?:推荐|recommended)[）)]\s*$", re.IGNORECASE)
 # Multi-select rows render a checkbox between the number and the label.
 _CHECKBOX = re.compile(r"^\[[^\]]?\]\s*")
+# A numbered row's checkbox, kept separate from _CHECKBOX so the tick state
+# survives parsing: pressing Enter on an already-ticked row unticks it.
+_CHECKED_ROW = re.compile(r"^\s*(?:❯)?\s*(\d+)[.．、]\s*\[([^\]]*)\]")
 # The free-text row's rendered placeholder.
 _OTHER = "Type something"
 
@@ -45,6 +48,30 @@ def parse_rows(text: str, multi: bool = False) -> list[tuple[int, str, bool]]:
                 label = _CHECKBOX.sub("", label).strip()
             rows.append((int(match.group(1)), label, _MARKER in line))
     return rows
+
+
+def _checked_states(text: str) -> dict[int, bool]:
+    """Row number -> whether its multi-select checkbox is ticked."""
+    states: dict[int, bool] = {}
+    for line in text.splitlines():
+        match = _CHECKED_ROW.match(line)
+        if match:
+            states[int(match.group(1))] = bool(match.group(2).strip())
+    return states
+
+
+def _focused_index(rows: list[tuple[int, str, bool]], start: int, count: int) -> int:
+    """The cursor's row index, searched only inside the matched dialog.
+
+    The pane tail can still show an older dialog above this one; taking the
+    first `❯` in the whole text would then compute key deltas from the wrong
+    origin and submit a different row.
+    """
+    hits = [start + i for i, row in enumerate(rows[start:start + count]) if row[2]]
+    if len(hits) != 1:
+        raise ScreenMismatch(
+            f"expected exactly one focused row in the dialog, found {len(hits)}")
+    return hits[0]
 
 
 def _locate(question: dict, text: str) -> tuple[list[tuple[int, str, bool]], int]:
@@ -84,9 +111,7 @@ def plan(question: dict, screen_text: str, option_index: int) -> list[tuple[str,
     if option_index < 0 or option_index >= len(labels) or target >= len(rows):
         raise ScreenMismatch(f"option index {option_index} out of screen range")
 
-    focused = next((i for i, row in enumerate(rows) if row[2]), None)
-    if focused is None:
-        raise ScreenMismatch("no focused row in the dialog")
+    focused = _focused_index(rows, start, len(labels) + 1)
 
     delta = target - focused
     if delta == 0:
@@ -117,9 +142,8 @@ def plan_multi(question: dict, screen_text: str,
     if not targets:
         raise ScreenMismatch("multi-select answer has no options")
 
-    focused = next((i for i, row in enumerate(rows) if row[2]), None)
-    if focused is None:
-        raise ScreenMismatch("no focused row in the dialog")
+    focused = _focused_index(rows, start, len(labels) + 1)
+    checked = _checked_states(screen_text)
 
     presses: list[tuple[str, int | str]] = []
     current = focused
@@ -127,7 +151,10 @@ def plan_multi(question: dict, screen_text: str,
         delta = target - current
         if delta:
             presses.append(("down" if delta > 0 else "up", abs(delta)))
-        presses.append(("enter", 1))
+        # Enter toggles. A row the user already ticked must be left alone:
+        # toggling it again would clear their choice.
+        if not checked.get(rows[target][0], False):
+            presses.append(("enter", 1))
         current = target
 
     # One row past the free-text row: walking down from there wraps onto the
@@ -158,9 +185,7 @@ def plan_free_text(question: dict, screen_text: str,
         raise ScreenMismatch(
             f"no free-text row after the recorded options in {rows!r}")
 
-    focused = next((i for i, row in enumerate(rows) if row[2]), None)
-    if focused is None:
-        raise ScreenMismatch("no focused row in the dialog")
+    focused = _focused_index(rows, start, len(labels) + 1)
 
     presses: list[tuple[str, int | str]] = []
     delta = other - focused
@@ -174,15 +199,32 @@ def plan_free_text(question: dict, screen_text: str,
     return presses
 
 
+def _question_visible(question: dict, text: str) -> bool:
+    """Whether the prompt itself appears in the pane, ignoring wrapping."""
+    prompt = "".join(str(question.get("question") or "").split())
+    if not prompt:
+        return False
+    return prompt[:24] in "".join(text.split())
+
+
 def match_question(questions: list[dict], text: str) -> tuple[int, dict] | None:
-    """Which recorded question the screen currently shows, if any."""
+    """Which recorded question the screen currently shows, if any.
+
+    Two questions can share the same option labels (Yes/No is common). When
+    more than one recorded question matches, the prompt text must name exactly
+    one of them; otherwise we refuse rather than answer the wrong question.
+    """
+    candidates: list[tuple[int, dict]] = []
     for index, question in enumerate(questions):
         try:
             _locate(question, text)
         except ScreenMismatch:
             continue
-        return index, question
-    return None
+        candidates.append((index, question))
+    if len(candidates) <= 1:
+        return candidates[0] if candidates else None
+    visible = [c for c in candidates if _question_visible(c[1], text)]
+    return visible[0] if len(visible) == 1 else None
 
 
 def is_review_screen(text: str) -> bool:

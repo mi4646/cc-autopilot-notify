@@ -47,8 +47,14 @@ hooks = data.get("hooks") or {}
 for event in list(hooks):
     kept = []
     for item in hooks[event]:
+        # Only remove our own runner. Another project may also ship a
+        # run_hook.py, and uninstalling this plugin must not touch it.
+        def is_ours(command):
+            return ("run_hook.py" in command
+                    and "cc_autopilot_notify" in command)
+
         inner = [h for h in item.get("hooks", [])
-                 if "run_hook.py" not in str(h.get("command", ""))]
+                 if not is_ours(str(h.get("command", "")))]
         if inner:
             kept.append({**item, "hooks": inner})
         elif not item.get("hooks"):

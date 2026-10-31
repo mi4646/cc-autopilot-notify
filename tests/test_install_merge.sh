@@ -3,6 +3,7 @@
 # Runs install in dry-run mode against a temp file; nothing real is touched.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+REPO=$(pwd)
 
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
@@ -62,7 +63,7 @@ JSON
   CC_AUTOPILOT_SETTINGS="$W/settings.json" \
   CC_AUTOPILOT_CONFIG="$W/cfg/config.json" \
   CC_AUTOPILOT_UNIT="$W/unit.service" \
-  /var/www/cc-autopilot-notify/install.sh >/dev/null
+  "$REPO/install.sh" >/dev/null
 ) || { echo "install failed from a foreign cwd"; exit 1; }
 
 [ -f "$W/cfg/config.json" ] || { echo "config.json not written"; exit 1; }
@@ -78,13 +79,13 @@ PY
 
 # A same-value string must not abort (no FORCE needed the second time).
 CC_AUTOPILOT_SETTINGS="$W/settings.json" CC_AUTOPILOT_CONFIG="$W/cfg/config.json" \
-  CC_AUTOPILOT_UNIT="$W/unit.service" /var/www/cc-autopilot-notify/install.sh >/dev/null \
+  CC_AUTOPILOT_UNIT="$W/unit.service" "$REPO/install.sh" >/dev/null \
   || { echo "re-install aborted on a same-value string"; exit 1; }
 
 chmod 644 "$W/settings.json"
 MODE_BEFORE=$(stat -c '%a' "$W/settings.json")
 CC_AUTOPILOT_SETTINGS="$W/settings.json" CC_AUTOPILOT_CONFIG="$W/cfg/config.json" \
-  CC_AUTOPILOT_UNIT="$W/unit.service" /var/www/cc-autopilot-notify/uninstall.sh >/dev/null
+  CC_AUTOPILOT_UNIT="$W/unit.service" "$REPO/uninstall.sh" >/dev/null
 python3 - "$W/settings.json" <<'PY'
 import json, sys
 d = json.load(open(sys.argv[1]))
@@ -127,3 +128,84 @@ fi
 cmp -s "$U/settings.json" "$U/settings.before" || { echo "install rewrote settings.json"; exit 1; }
 rm -rf "$U"
 echo "OK: non-UTF-8 settings refused without touching anything"
+
+# --- uninstall removes only our runner ---------------------------------
+# Another project may also ship run_hook.py; only entries that name our
+# package may be removed.
+V=$(mktemp -d)
+cat > "$V/settings.json" <<'JSON'
+{"hooks": {"Stop": [
+  {"matcher": "", "hooks": [{"type": "command", "command": "python3 /other/project/run_hook.py notify"}]},
+  {"matcher": "", "hooks": [{"type": "command", "command": "PYTHONPATH=/repo python3 /repo/cc_autopilot_notify/run_hook.py notify"}]}
+]}}
+JSON
+CC_AUTOPILOT_SETTINGS="$V/settings.json" CC_AUTOPILOT_CONFIG="$V/config.json" \
+  CC_AUTOPILOT_UNIT="$V/unit.service" "$REPO/uninstall.sh" >/dev/null
+python3 - "$V/settings.json" <<'PY'
+import json, sys
+flat = json.dumps(json.load(open(sys.argv[1])))
+assert "/other/project/run_hook.py" in flat, "uninstall removed another project's hook"
+assert "cc_autopilot_notify" not in flat, "our hook survived uninstall"
+PY
+rm -rf "$V"
+echo "OK: uninstall leaves foreign run_hook.py entries alone"
+
+# --- re-install is idempotent ------------------------------------------
+R=$(mktemp -d)
+for _ in 1 2; do
+  CC_AUTOPILOT_SETTINGS="$R/settings.json" CC_AUTOPILOT_CONFIG="$R/cfg/config.json" \
+    CC_AUTOPILOT_UNIT="$R/unit.service" "$REPO/install.sh" >/dev/null
+done
+python3 - "$R/settings.json" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+stops = [h for item in d["hooks"]["Stop"] for h in item.get("hooks", [])
+         if "cc_autopilot_notify" in str(h.get("command", ""))
+         and "run_hook.py" in str(h.get("command", ""))]
+assert len(stops) == 1, f"duplicate Stop hooks after re-install: {stops}"
+PY
+rm -rf "$R"
+echo "OK: re-install does not duplicate hooks"
+
+# --- an existing config is never overwritten ---------------------------
+C=$(mktemp -d)
+mkdir -p "$C/cfg"
+printf '%s' '{"channels":{"feishu":{"webhook":"https://open.feishu.cn/open-apis/bot/v2/hook/KEEP"}}}' \
+  > "$C/cfg/config.json"
+chmod 600 "$C/cfg/config.json"
+CC_AUTOPILOT_SETTINGS="$C/settings.json" CC_AUTOPILOT_CONFIG="$C/cfg/config.json" \
+  CC_AUTOPILOT_UNIT="$C/unit.service" "$REPO/install.sh" >/dev/null
+python3 - "$C/cfg/config.json" <<'PY'
+import json, os, sys
+path = sys.argv[1]
+d = json.load(open(path))
+assert d["channels"]["feishu"]["webhook"].endswith("KEEP"), "install overwrote the webhook"
+assert (os.stat(path).st_mode & 0o777) == 0o600, "config mode is not 0600"
+PY
+rm -rf "$C"
+echo "OK: install keeps an existing config and its mode"
+
+# --- a checkout path with spaces still yields one argv token -----------
+S="$TMP/with space"
+mkdir -p "$S"
+tar -C "$REPO" --exclude=.git --exclude=.context --exclude=.gstack \
+  --exclude=.pytest_cache -cf - . | tar -C "$S" -xf -
+CC_AUTOPILOT_SETTINGS="$TMP/space-settings.json" \
+  CC_AUTOPILOT_CONFIG="$TMP/space-cfg/config.json" \
+  CC_AUTOPILOT_UNIT="$TMP/space.service" CC_AUTOPILOT_DRY_RUN=1 \
+  "$S/install.sh" > "$TMP/space-out.json" 2> "$TMP/space-err.txt" \
+  || { echo "install failed under a path with spaces"; cat "$TMP/space-err.txt"; exit 1; }
+[ -s "$TMP/space-out.json" ] \
+  || { echo "install produced no settings under a path with spaces"; cat "$TMP/space-err.txt"; exit 1; }
+python3 - "$TMP/space-out.json" "$S" <<'PY'
+import json, shlex, sys
+data = json.load(open(sys.argv[1]))
+commands = [h["command"] for items in data["hooks"].values()
+            for item in items for h in item.get("hooks", [])]
+assert commands, "no hooks projected"
+for command in commands:
+    parts = shlex.split(command)
+    assert any(sys.argv[2] in part for part in parts), \
+        f"checkout path split into multiple argv tokens: {command}"
+PY
+echo "OK: paths with spaces stay a single token"

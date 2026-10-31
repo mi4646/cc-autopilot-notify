@@ -7,6 +7,7 @@ someone who never saw a thing, so the body is what decides success.
 
 from __future__ import annotations
 
+import http.client
 import json
 import logging
 import time
@@ -96,15 +97,19 @@ def _card(n) -> dict:
 
 def send(n, webhook: str, timeout: float = 10) -> None:
     payload = json.dumps(_card(n), ensure_ascii=False).encode("utf-8")
-    request = urllib.request.Request(
-        webhook, data=payload,
-        headers={"Content-Type": "application/json; charset=utf-8"},
-        method="POST",
-    )
     try:
+        request = urllib.request.Request(
+            webhook, data=payload,
+            headers={"Content-Type": "application/json; charset=utf-8"},
+            method="POST",
+        )
         with urllib.request.urlopen(request, timeout=timeout) as response:
             body = response.read().decode("utf-8", errors="replace")
             check_response(response.status, body)
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")
         raise FeishuError(f"HTTP {exc.code}: {detail[:200]}") from None
+    except (ValueError, OSError, http.client.HTTPException) as exc:
+        # The webhook token lives in the URL path; never put the URL (or the
+        # exception's rendering of it) into a message that reaches a log.
+        raise FeishuError(f"request failed: {type(exc).__name__}") from None

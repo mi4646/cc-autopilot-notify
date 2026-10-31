@@ -152,11 +152,12 @@ def test_plan_free_text_refuses_a_foreign_screen():
     raise AssertionError("must not paste into an unverified row")
 
 
-def test_plan_multi_toggles_each_target_then_submits():
+def test_plan_multi_leaves_an_already_ticked_option_alone():
+    """Pressing Enter on a ticked row would clear the user's choice."""
     text = ("❯ 1. [ ] A\n  2. [ ] B\n  3. [✓] C\n"
             "  4. [ ] Type something\n")
     assert screen.plan_multi(_multi_q(["A", "B", "C"]), text, (0, 2)) == \
-        [("enter", 1), ("down", 2), ("enter", 1), ("down", 2), ("enter", 1)]
+        [("enter", 1), ("down", 2), ("down", 2), ("enter", 1)]
 
 
 def test_plan_multi_single_target():
@@ -182,6 +183,25 @@ def test_match_question_finds_the_visible_one():
 
 def test_match_question_returns_none_for_foreign_screen():
     assert screen.match_question([_q(["A", "B"])], "❯ 1. X\n  2. Y\n") is None
+
+
+def test_plan_ignores_a_focus_marker_from_an_older_dialog():
+    """The pane tail may still show yesterday's cursor above today's dialog."""
+    text = "❯ 1. Old\n  2. Old2\n  1. A\n❯ 2. B\n"
+    assert screen.plan(_q(["A", "B"]), text, 1) == [("enter", 1)]
+
+
+def test_match_question_refuses_duplicate_labels_without_a_prompt():
+    q1 = {"question": "Pick one", "options": [{"label": "Yes"}, {"label": "No"}]}
+    q2 = {"question": "Pick two", "options": [{"label": "Yes"}, {"label": "No"}]}
+    assert screen.match_question([q1, q2], "❯ 1. Yes\n  2. No\n") is None
+
+
+def test_match_question_uses_the_prompt_to_disambiguate():
+    q1 = {"question": "Pick one", "options": [{"label": "Yes"}, {"label": "No"}]}
+    q2 = {"question": "Pick two", "options": [{"label": "Yes"}, {"label": "No"}]}
+    text = "Pick two\n❯ 1. Yes\n  2. No\n"
+    assert screen.match_question([q1, q2], text)[0] == 1
 
 
 def test_review_screen_detection():

@@ -47,6 +47,22 @@ def test_bump_counts(tmp_path):
     assert state.bump_choose_failures("s1", tmp_path) == 2
 
 
+def test_set_pane_preserves_fields_written_concurrently(tmp_path):
+    state.record(_pending(), tmp_path)
+    state.bump_choose_failures("s1", tmp_path)
+    updated = state.set_pane("s1", tmp_path, window_id=9, pane_id=10)
+    assert updated is not None
+    got = state.load_all(tmp_path)[0]
+    assert (got.window_id, got.pane_id) == (9, 10)
+    assert got.choose_failures == 1
+    assert got.questions == _pending().questions
+
+
+def test_set_pane_does_not_resurrect_a_forgotten_record(tmp_path):
+    assert state.set_pane("missing", tmp_path, window_id=1, pane_id=2) is None
+    assert state.load_all(tmp_path) == []
+
+
 def test_corrupt_record_is_skipped_not_fatal(tmp_path):
     (tmp_path / "pending_s1.json").write_text("{broken")
     state.record(_pending("s2"), tmp_path)

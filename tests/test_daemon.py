@@ -358,6 +358,22 @@ def test_unanswered_question_keeps_the_record_when_screen_goes_foreign(tmp_path)
     assert got[0].choose_failures == 1
 
 
+def test_question_in_a_continued_round_is_still_answered(tmp_path):
+    """record_questions keeps finished_at set; the answer path must still run."""
+    state.record(state.Pending(
+        session_id="s1", window_id=1, pane_id=2,
+        questions=[{"question": "Q1", "options": [{"label": "A"}, {"label": "B"}]}],
+        appeared_at=1000.0, last_activity=1000.0, finished_at=1000.0,
+    ), tmp_path)
+    keys = []
+    deps = _screen_deps([
+        {"state": "attention", "text": "❯ 1. A\n  2. B\n", "revision": "r1"},
+        {"state": "done", "text": "", "revision": "r2"},
+    ], keys)
+    daemon.tick(1000.0 + 150, tmp_path, _cfg(), deps)
+    assert keys == [("enter", 1)], keys
+
+
 def test_stalled_panel_advances_with_tab(tmp_path):
     """A single-select question that does not auto-advance is left with Tab."""
     _record_questions(tmp_path, [

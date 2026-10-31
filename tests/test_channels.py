@@ -26,6 +26,15 @@ def test_feishu_rejects_non_200():
         channels.feishu.check_response(500, "boom")
 
 
+def test_feishu_error_never_echoes_the_webhook():
+    """The token lives in the URL path; an exception must not leak it."""
+    secret = "https://open.feishu.cn/open-apis/bot/v2/hook/SECRET TOKEN"
+    with pytest.raises(channels.feishu.FeishuError) as exc:
+        channels.feishu.send(_n(), secret)
+    assert "SECRET" not in str(exc.value)
+    assert "open.feishu.cn" not in str(exc.value)
+
+
 def test_send_all_reports_failures_without_raising(monkeypatch):
     def boom(*a, **k):
         raise RuntimeError("down")

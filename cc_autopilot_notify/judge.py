@@ -16,12 +16,19 @@ import dataclasses
 import json
 import logging
 import os
+import re
 import urllib.error
 import urllib.request
 
 log = logging.getLogger(__name__)
 
 _SUFFIXES = ("(recommended)", "（推荐）", "(推荐)", "（recommended）")
+
+# A description only marks a recommendation when it says so affirmatively:
+# "not recommended for production" must never win the vote.
+_DESC_MARKER = re.compile(r"\brecommended\b|推荐", re.IGNORECASE)
+_DESC_NEGATED = re.compile(
+    r"\b(?:not|never)\b[^.]{0,30}?\brecommended\b|不推荐|不建议", re.IGNORECASE)
 
 # When nothing distinguishes an option, the answer sent back is this free
 # text: it delegates the choice to Claude itself, who has the context the
@@ -60,7 +67,8 @@ def marker_indices(question: dict) -> list[int]:
         if any(lowered.endswith(suffix) for suffix in _SUFFIXES):
             hits.append(index)
             continue
-        if "recommended" in str(option.get("description") or "").lower():
+        description = str(option.get("description") or "")
+        if _DESC_MARKER.search(description) and not _DESC_NEGATED.search(description):
             hits.append(index)
     return hits
 

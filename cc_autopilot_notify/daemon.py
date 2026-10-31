@@ -295,10 +295,18 @@ def _tick_one(pending: state.Pending, now: float, root: Path, cfg: dict,
                 state.forget(sid, root)
                 log.info("daemon: %s never appeared in any Pebrel pane; dropping", sid)
             return
+        # Write only the pane ids: a full-record write from this tick's stale
+        # snapshot would overwrite hook updates made during the locate round
+        # trip, and could resurrect a record the hook just forgot.
+        if state.set_pane(sid, root, window_id=located[0],
+                          pane_id=located[1]) is None:
+            return
         pending.window_id, pending.pane_id = located
-        state.record(pending, root)
 
-    if pending.finished_at is not None:
+    # A question raised inside an auto-continued round keeps finished_at set
+    # (record_questions deliberately does not clear it). It still has to reach
+    # the answer path below, or neither branch will ever answer it.
+    if pending.finished_at is not None and not pending.questions:
         actions.extend(continuation.handle(
             pending, now, root, cfg, _continue_deps(deps, gate, now)))
         return

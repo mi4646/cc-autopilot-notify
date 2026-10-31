@@ -88,6 +88,16 @@ def record(pending: Pending, root: Path) -> None:
                       dataclasses.asdict(pending))
 
 
+def set_pane(session_id: str, root: Path, *, window_id: int,
+             pane_id: int) -> Pending | None:
+    """Update only the pane ids under the lock, preserving concurrent edits."""
+    def change(p: Pending) -> None:
+        p.window_id = window_id
+        p.pane_id = pane_id
+
+    return _mutate(session_id, root, change)
+
+
 def load_all(root: Path) -> list[Pending]:
     root = Path(root)
     if not root.is_dir():

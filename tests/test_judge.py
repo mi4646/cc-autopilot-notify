@@ -25,6 +25,18 @@ def test_no_marker_returns_none():
     assert judge.marker_index(_q([{"label": "A"}, {"label": "B"}])) is None
 
 
+def test_negated_description_is_not_a_marker():
+    q = _q([{"label": "A", "description": "This is not recommended for production"},
+            {"label": "B", "description": "slower"}])
+    assert judge.marker_index(q) is None
+
+
+def test_negated_chinese_description_is_not_a_marker():
+    q = _q([{"label": "甲", "description": "不推荐用于生产"},
+            {"label": "乙", "description": "更慢"}])
+    assert judge.marker_index(q) is None
+
+
 def test_ambiguous_markers_return_none():
     q = _q([{"label": "A (Recommended)"}, {"label": "B (Recommended)"}])
     assert judge.marker_index(q) is None
