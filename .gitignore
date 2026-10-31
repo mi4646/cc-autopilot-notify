@@ -12,6 +12,7 @@ config.json
 
 # 工具暂存（gstack 技能套件：session id、缓存、日志）
 .context/
+.codex-session-id
 
 # 备份
 *.bak-*
