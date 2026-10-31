@@ -3,7 +3,8 @@ import time
 
 import pytest
 
-from cc_autopilot_notify import doctor, hook_permission, state
+from cc_autopilot_notify import doctor, hook_permission, judge as hook_judge, state
+from cc_autopilot_notify.judge import Decision
 from cc_autopilot_notify.presence import Presence
 
 
@@ -46,7 +47,10 @@ def _auq():
 
 
 def test_answer_returns_hook_shape():
-    out = hook_permission.answer(_auq(), wait_seconds=0, judge_fn=lambda q: 1)
+    out = hook_permission.answer(
+        _auq(), wait_seconds=0,
+        judge_fn=lambda q: Decision(indices=(1,), labels=("B (Recommended)",),
+                                    reason="", fallback=False))
     assert out["hookSpecificOutput"]["hookEventName"] == "PermissionRequest"
     assert out["hookSpecificOutput"]["decision"]["behavior"] == "allow"
     answers = out["hookSpecificOutput"]["decision"]["updatedInput"]["answers"]
@@ -58,11 +62,31 @@ def test_answer_ignores_other_tools():
     assert hook_permission.answer(ev, wait_seconds=0, judge_fn=lambda q: 0) is None
 
 
-def test_answer_multiselect_joins_labels():
+def test_answer_multiselect_ticks_recommended():
     ev = _auq()
     ev["tool_input"]["questions"][0]["multiSelect"] = True
     out = hook_permission.answer(ev, wait_seconds=0, judge_fn=lambda q: 0)
-    assert "," in out["hookSpecificOutput"]["decision"]["updatedInput"]["answers"]["Q"]
+    answers = out["hookSpecificOutput"]["decision"]["updatedInput"]["answers"]
+    assert answers["Q"] == "B (Recommended)"
+
+
+def test_answer_multiselect_delegates_without_marker():
+    ev = _auq()
+    q = ev["tool_input"]["questions"][0]
+    q["multiSelect"] = True
+    q["options"] = [{"label": "A"}, {"label": "B"}]
+    out = hook_permission.answer(ev, wait_seconds=0, judge_fn=lambda q: 0)
+    answers = out["hookSpecificOutput"]["decision"]["updatedInput"]["answers"]
+    assert answers["Q"] == hook_judge.DELEGATE_TEXT
+
+
+def test_answer_single_select_fallback_delegates():
+    out = hook_permission.answer(
+        _auq(), wait_seconds=0,
+        judge_fn=lambda q: Decision(indices=(0,), labels=("A",),
+                                    reason="", fallback=True))
+    answers = out["hookSpecificOutput"]["decision"]["updatedInput"]["answers"]
+    assert answers["Q"] == hook_judge.DELEGATE_TEXT
 
 
 def test_doctor_reports_missing_heartbeat_as_fail(tmp_path):

@@ -23,6 +23,12 @@ log = logging.getLogger(__name__)
 
 _SUFFIXES = ("(recommended)", "（推荐）", "(推荐)", "（recommended）")
 
+# When nothing distinguishes an option, the answer sent back is this free
+# text: it delegates the choice to Claude itself, who has the context the
+# daemon lacks. Verified live (2026-10-31) that the AskUserQuestion dialog's
+# "Type something" row accepts pasted text and submits it as the answer.
+DELEGATE_TEXT = "按照你的建议来"
+
 
 @dataclasses.dataclass
 class Decision:
@@ -30,6 +36,7 @@ class Decision:
     labels: tuple[str, ...]
     reason: str
     fallback: bool
+    delegate: bool = False
 
     @property
     def index(self) -> int:
@@ -147,10 +154,12 @@ def pick(question: dict, model: str | None, call_model=None) -> Decision:
 def pick_multi(question: dict, model: str | None = None, call_model=None) -> Decision:
     """Choose the set of options to tick in a multi-select question.
 
-    All recommended markers are ticked; with no marker the answer is the first
-    option alone, matching the single-select fallback. The model is not asked:
-    there is no prompt shape for "a set of options" that we have verified, and
-    guessing a set is worse than ticking one.
+    All recommended markers are ticked. With no marker there is nothing to
+    guess from: multi-select means the asker wants a set, and ticking one
+    arbitrary option is the worst-shaped answer — so the decision is delegated
+    back to Claude as free text (DELEGATE_TEXT) instead. The model is not
+    asked: there is no verified prompt shape for "a set of options", and
+    guessing a set is worse than delegating.
     """
     options = _labels(question)
     if not options:
@@ -161,6 +170,6 @@ def pick_multi(question: dict, model: str | None = None, call_model=None) -> Dec
         return Decision(indices=tuple(hits),
                         labels=tuple(str(options[i].get("label", "")) for i in hits),
                         reason="claude marked them recommended", fallback=False)
-    return Decision(indices=(0,), labels=(str(options[0].get("label", "")),),
-                    reason="no recommendation available; fell back to first option",
-                    fallback=True)
+    return Decision(indices=(), labels=(DELEGATE_TEXT,),
+                    reason="no recommendation; delegated the choice back to Claude",
+                    fallback=True, delegate=True)

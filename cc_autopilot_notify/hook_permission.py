@@ -37,19 +37,22 @@ def answer(event: dict, wait_seconds: float, judge_fn) -> dict | None:
         options = [o for o in (question.get("options") or []) if isinstance(o, dict)]
         if not options:
             continue
-        index = judge_fn(question)
-        if not 0 <= index < len(options):
-            index = 0
         if question.get("multiSelect"):
-            # Multi-select legitimately holds several labels, and the plan's
-            # contract is a comma-joined answer. Union the judged option with
-            # every option Claude marked, so both signals survive. With no
-            # marks this collapses to the judged option alone.
-            marked = [i for i, o in enumerate(options)
-                      if judge.marker_index({"options": [o]}) == 0]
-            picks = sorted({index, *marked})
+            decision = judge.pick_multi(question)
+            if decision.delegate:
+                # Nothing marks a preference: delegate the choice back to
+                # Claude rather than ticking an arbitrary subset.
+                answers[question["question"]] = judge.DELEGATE_TEXT
+                continue
+            picks = list(decision.indices)
         else:
-            picks = [index]
+            decision = judge_fn(question)
+            if decision.fallback:
+                # The marker was absent and the model gave nothing usable;
+                # the same delegation applies, and the hook needs no keys.
+                answers[question["question"]] = judge.DELEGATE_TEXT
+                continue
+            picks = [decision.index]
         labels = [str(options[i].get("label", "")) for i in picks]
         labels = [label for label in labels if label]
         if not labels:
@@ -78,7 +81,7 @@ def handle(event: dict, root, cfg: dict) -> int:
     hook_timeout = float(os.environ.get("CC_AUTOPILOT_HOOK_TIMEOUT", "180"))
     wait = min(config.background_seconds(cfg), max(hook_timeout - 10.0, 0.0))
     payload = answer(event, wait_seconds=wait,
-                     judge_fn=lambda q: judge.pick(q, model=config.judge_model(cfg)).index)
+                     judge_fn=lambda q: judge.pick(q, model=config.judge_model(cfg)))
     if payload is not None:
         print(json.dumps(payload))
     return 0

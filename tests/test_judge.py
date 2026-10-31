@@ -86,10 +86,13 @@ def test_pick_many_single_marker():
     assert (d.indices, d.fallback) == ((1,), False)
 
 
-def test_pick_many_without_marker_falls_back_to_first_only():
+def test_pick_many_without_marker_delegates_as_free_text():
     q = _q([{"label": "A"}, {"label": "B"}, {"label": "C"}])
     d = judge.pick_multi(q, model=None)
-    assert (d.indices, d.fallback) == ((0,), True)
+    assert d.indices == ()
+    assert d.labels == (judge.DELEGATE_TEXT,)
+    assert d.fallback is True
+    assert d.delegate is True
 
 
 def test_pick_many_never_calls_the_model():

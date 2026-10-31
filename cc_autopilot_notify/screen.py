@@ -17,6 +17,8 @@ _ROW = re.compile(r"^\s*(?:❯)?\s*(\d+)[.．、]\s*(.+?)\s*$")
 _DECOR = re.compile(r"\s*[（(](?:推荐|recommended)[）)]\s*$", re.IGNORECASE)
 # Multi-select rows render a checkbox between the number and the label.
 _CHECKBOX = re.compile(r"^\[[^\]]?\]\s*")
+# The free-text row's rendered placeholder.
+_OTHER = "Type something"
 
 
 def _stem(label: str) -> str:
@@ -34,6 +36,8 @@ def parse_rows(text: str, multi: bool = False) -> list[tuple[int, str, bool]]:
         # Rows look like "❯ 1. Native：…" or "  2. Subagent-driven：…". Prose
         # lines (paragraphs, numbered lists in the transcript) do not match
         # because they carry a separator and the marker only appears on rows.
+        # Numbered chrome below the dialog ("4. Chat about this") does match,
+        # but planning anchors on the recorded labels and never walks onto it.
         match = _ROW.match(line)
         if match:
             label = match.group(2)
@@ -92,15 +96,19 @@ def plan(question: dict, screen_text: str, option_index: int) -> list[tuple[str,
 
 
 def plan_multi(question: dict, screen_text: str,
-               option_indices: tuple[int, ...] | list[int]) -> list[tuple[str, int]]:
+               option_indices: tuple[int, ...] | list[int]) -> list[tuple[str, int | str]]:
     """Key presses to tick every option in `option_indices`, then submit.
 
-    Multi-select rows are toggled with Space. The submit control is the row
-    after the last option (the dialog always renders it for multi-select), so
-    the sequence walks down to it and presses Enter.
+    Multi-select rows are toggled with Enter — verified live (2026-10-31):
+    the runtime refuses a `space` key entirely, and in the multi-select
+    dialog Enter toggles the focused row ([ ] → [✔]). The submit control is
+    the header tab past the last row, so the sequence walks down past the
+    end (an extra step is absorbed there) and presses Enter, which opens the
+    review screen the caller then confirms.
     """
     rows, start = _locate(question, screen_text)
     options = question.get("options") or []
+    labels = [str(o.get("label", "")) for o in options]
     targets: list[int] = []
     for index in option_indices:
         if index < 0 or index >= len(options):
@@ -113,19 +121,55 @@ def plan_multi(question: dict, screen_text: str,
     if focused is None:
         raise ScreenMismatch("no focused row in the dialog")
 
-    presses: list[tuple[str, int]] = []
+    presses: list[tuple[str, int | str]] = []
     current = focused
     for target in sorted(set(targets)):
         delta = target - current
         if delta:
             presses.append(("down" if delta > 0 else "up", abs(delta)))
-        presses.append(("space", 1))
+        presses.append(("enter", 1))
         current = target
 
-    # Rows after the last target, plus one for the submit control itself.
-    remaining = len(rows) - current
-    if remaining:
-        presses.append(("down", remaining))
+    # One row past the free-text row: walking down from there wraps onto the
+    # header Submit tab (verified live 2026-10-31), where Enter opens the
+    # review screen. The count comes from the recorded geometry, not the
+    # parsed rows — numbered chrome below the dialog would overcount.
+    remaining = start + len(labels) + 1 - current
+    presses.append(("down", remaining))
+    presses.append(("enter", 1))
+    return presses
+
+
+def plan_free_text(question: dict, screen_text: str,
+                   text: str) -> list[tuple[str, int | str]]:
+    """Key presses to answer via the free-text row, for a delegated decision.
+
+    Verified live (2026-10-31) against a real multi-select dialog: Enter on
+    the "Type something" row activates it, a paste replaces the placeholder
+    with the text, Enter confirms (the row shows [✔] with the text), one more
+    down wraps onto the header Submit tab, and Enter opens the review screen
+    the caller confirms. Anything but the recorded placeholder on that row is
+    refused: pasting into an unknown row is how a wrong answer gets submitted.
+    """
+    rows, start = _locate(question, screen_text)
+    labels = [str(o.get("label", "")) for o in (question.get("options") or [])]
+    other = start + len(labels)
+    if other >= len(rows) or _stem(rows[other][1]) != _OTHER:
+        raise ScreenMismatch(
+            f"no free-text row after the recorded options in {rows!r}")
+
+    focused = next((i for i, row in enumerate(rows) if row[2]), None)
+    if focused is None:
+        raise ScreenMismatch("no focused row in the dialog")
+
+    presses: list[tuple[str, int | str]] = []
+    delta = other - focused
+    if delta:
+        presses.append(("down" if delta > 0 else "up", abs(delta)))
+    presses.append(("enter", 1))
+    presses.append(("paste", text))
+    presses.append(("enter", 1))
+    presses.append(("down", 1))
     presses.append(("enter", 1))
     return presses
 

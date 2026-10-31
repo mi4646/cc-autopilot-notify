@@ -304,8 +304,40 @@ def test_multiselect_toggles_each_chosen_option(tmp_path):
         {"state": "done", "text": "", "revision": "r2"},
     ], keys, multi_indices=(0, 2))
     daemon.tick(1000.0 + 150, tmp_path, _cfg(), deps)
-    assert keys == [("space", 1), ("down", 2), ("space", 1),
+    # Enter toggles (the runtime has no space key); the walk past the last
+    # recorded row wraps onto the header Submit tab.
+    assert keys == [("enter", 1), ("down", 2), ("enter", 1),
                     ("down", 2), ("enter", 1)], keys
+
+
+def test_multiselect_without_marker_delegates_as_free_text(tmp_path):
+    """No recommendation, no guess: the answer is sent as free text."""
+    from cc_autopilot_notify.judge import Decision
+
+    _record_questions(tmp_path, [
+        {"question": "Pick", "multiSelect": True,
+         "options": [{"label": "A"}, {"label": "B"}]},
+    ])
+    keys = []
+    deps = _screen_deps([
+        {"state": "attention",
+         "text": ("❯ 1. [ ] A\n  2. [ ] B\n"
+                  "  3. [ ] Type something\n"
+                  "  4. Chat about this\n"
+                  "Enter to select · Esc to cancel\n"), "revision": "r1"},
+        {"state": "attention", "text": "Review your answers\nSubmit answers\n",
+         "revision": "r2"},
+        {"state": "done", "text": "", "revision": "r3"},
+    ], keys, multi_indices=())
+    pastes = []
+    deps.paste = lambda p, text: pastes.append(text) or {"ok": True}
+    deps.judge_multi_fn = lambda q: Decision(
+        indices=(), labels=(judge.DELEGATE_TEXT,),
+        reason="no recommendation; delegated", fallback=True, delegate=True)
+    daemon.tick(1000.0 + 150, tmp_path, _cfg(), deps)
+    assert pastes == [judge.DELEGATE_TEXT], pastes
+    assert keys == [("down", 2), ("enter", 1), ("enter", 1),
+                    ("down", 1), ("enter", 1), ("enter", 1)], keys
 
 
 def test_unanswered_question_keeps_the_record_when_screen_goes_foreign(tmp_path):

@@ -1,6 +1,7 @@
 import pytest
 
 from cc_autopilot_notify import pebrel_runtime
+from pathlib import Path
 
 
 def _fake_appdata(tmp_path, port, token="a" * 32):
@@ -20,6 +21,28 @@ def test_endpoint_parses_port_and_token(tmp_path):
 def test_endpoint_missing_raises(tmp_path):
     with pytest.raises(pebrel_runtime.RuntimeError):
         pebrel_runtime.endpoint(tmp_path)
+
+
+def test_press_repeats_client_side(monkeypatch):
+    """The runtime ignores the repeat field (live-verified); loop here."""
+    calls = []
+
+    def fake_call(appdata, method, params):
+        calls.append(params)
+        return {"ok": True}
+
+    monkeypatch.setattr(pebrel_runtime, "_call", fake_call)
+    pebrel_runtime.press(Path("/tmp"), 3, "down", 2)
+    assert len(calls) == 2
+    assert calls[0] == {"pane_id": 3, "key": "down"}
+
+
+def test_paste_sends_text(monkeypatch):
+    calls = []
+    monkeypatch.setattr(pebrel_runtime, "_call",
+                        lambda a, m, p: calls.append((m, p)) or {"ok": True})
+    pebrel_runtime.paste(Path("/tmp"), 3, "按照你的建议来")
+    assert calls == [("pane.paste", {"pane_id": 3, "text": "按照你的建议来"})]
 
 
 def test_supports_conversation_true():

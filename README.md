@@ -30,7 +30,11 @@ typing in another window keeps system idle at zero, so the timer does not run.
 - **Questions** notify immediately (`PreToolUse` on `AskUserQuestion`).
 - When the daemon auto-answers, a green card records every choice: the
   question, the chosen option label(s), and why (Claude's recommendation
-  marker, a model judgment, or `无推荐，选了第一项` for the blind fallback).
+  marker, a model judgment, or `无推荐，代答『按照你的建议来』` when nothing
+  marked a preference — multi-select without markers and the single-select
+  model-failure fallback both send that free text back, delegating the choice
+  to Claude instead of guessing; multi-select rows are toggled with Enter
+  because the runtime refuses a `space` key).
 - Titles read `project · event`; the project comes from the session's cwd, with
   worktrees resolved to their repository root and the home directory shown as
   `~` (`~/a/b/…/last` for deep paths).

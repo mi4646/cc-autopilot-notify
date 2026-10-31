@@ -102,17 +102,67 @@ def test_parse_rows_strips_multiselect_checkbox():
     assert [r[1] for r in screen.parse_rows(text, multi=True)] == ["A", "B"]
 
 
+_REAL_MULTI_SCREEN = (
+    "Ran 1 shell command\n"
+    "──────────────────────────────\n"
+    "←  ☒ 探针问题  ✔ Submit  →\n"
+    "\n"
+    "│ 【探针】请勿碰面板\n"
+    "\n"
+    "❯ 1. [ ] 选项A\n"
+    "         占位选项 A\n"
+    "  2. [ ] 选项B\n"
+    "         占位选项 B\n"
+    "  3. [ ] Type something\n"
+    "     Submit\n"
+    "──────────────────────────────\n"
+    "  4. Chat about this\n"
+    "\n"
+    "Enter to select · ↑/↓ to navigate · Esc to cancel\n"
+    "❯ \n")
+
+
+def test_real_shape_multiselect_locates_and_plans():
+    q = _multi_q(["选项A", "选项B"])
+    rows, start = None, None
+    # _locate is internal; exercise it through plan_multi on the live shape.
+    presses = screen.plan_multi(q, _REAL_MULTI_SCREEN, (0,))
+    assert presses[0] == ("enter", 1), "cursor starts on row 1"
+
+
+def test_plan_free_text_walks_the_verified_sequence():
+    q = _multi_q(["选项A", "选项B"])
+    presses = screen.plan_free_text(q, _REAL_MULTI_SCREEN, "按照你的建议来")
+    assert presses == [
+        ("down", 2),      # focused row 1 -> free-text row 3
+        ("enter", 1),     # activate the free-text row
+        ("paste", "按照你的建议来"),
+        ("enter", 1),     # confirm: row shows [✔] with the text
+        ("down", 1),      # past the last row -> header Submit tab
+        ("enter", 1),     # -> review screen
+    ]
+
+
+def test_plan_free_text_refuses_a_foreign_screen():
+    text = "❯ 1. [ ] X\n  2. [ ] Y\n  3. [ ] Something else\n"
+    try:
+        screen.plan_free_text(_multi_q(["X", "Y"]), text, "按照你的建议来")
+    except screen.ScreenMismatch:
+        return
+    raise AssertionError("must not paste into an unverified row")
+
+
 def test_plan_multi_toggles_each_target_then_submits():
     text = ("❯ 1. [ ] A\n  2. [ ] B\n  3. [✓] C\n"
             "  4. [ ] Type something\n")
     assert screen.plan_multi(_multi_q(["A", "B", "C"]), text, (0, 2)) == \
-        [("space", 1), ("down", 2), ("space", 1), ("down", 2), ("enter", 1)]
+        [("enter", 1), ("down", 2), ("enter", 1), ("down", 2), ("enter", 1)]
 
 
 def test_plan_multi_single_target():
     text = "❯ 1. [ ] A\n  2. [ ] B\n  3. [ ] Type something\n"
     assert screen.plan_multi(_multi_q(["A", "B"]), text, (1,)) == \
-        [("down", 1), ("space", 1), ("down", 2), ("enter", 1)]
+        [("down", 1), ("enter", 1), ("down", 2), ("enter", 1)]
 
 
 def test_plan_multi_refuses_a_foreign_screen():

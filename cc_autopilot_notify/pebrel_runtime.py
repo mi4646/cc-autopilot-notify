@@ -140,11 +140,25 @@ def dialog(appdata: Path, pane_id: int) -> dict:
 
 
 def press(appdata: Path, pane_id: int, key: str, repeat: int = 1) -> dict:
-    """Send a named key to a pane. `key` is one of the runtime's key names."""
-    params = {"pane_id": pane_id, "key": key}
-    if repeat != 1:
-        params["repeat"] = repeat
-    return _call(appdata, "pane.send_key", params)
+    """Send a named key to a pane. `key` is one of the runtime's key names.
+
+    The runtime ignores the `repeat` field — verified live (2026-10-31):
+    repeat=2 was echoed back as repeat=1 with one keypress's bytes — so the
+    loop happens here; otherwise every multi-row navigation undercounts.
+    """
+    result: dict = {}
+    for _ in range(max(int(repeat), 1)):
+        result = _call(appdata, "pane.send_key", {"pane_id": pane_id, "key": key})
+    return result
+
+
+def paste(appdata: Path, pane_id: int, text: str) -> dict:
+    """Paste text into the pane's focused input (dialog rows included).
+
+    The runtime refuses whitespace-only text ("paste text must not be empty");
+    callers only paste non-blank answer text.
+    """
+    return _call(appdata, "pane.paste", {"pane_id": pane_id, "text": text})
 
 
 def read(appdata: Path, window_id: int, pane_id: int, session_id: str) -> dict:

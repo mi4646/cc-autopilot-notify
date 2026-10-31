@@ -64,6 +64,7 @@ class Deps:
     agents: Callable[[], list] = lambda: []
     judge_multi_fn: Callable[[dict], "judge.Decision"] = lambda q: (0,)
     sleep: Callable[[float], None] = time.sleep
+    paste: Callable[[state.Pending, str], dict] = lambda p, text: {"ok": True}
 
 
 @dataclasses.dataclass
@@ -125,7 +126,10 @@ class _JudgeFailed(Exception):
 def _press_or_raise(pending: state.Pending, key: str, repeat: int,
                     deps: Deps) -> None:
     try:
-        result = deps.press(pending, key, repeat)
+        if key == "paste":
+            result = deps.paste(pending, str(repeat))
+        else:
+            result = deps.press(pending, key, repeat)
     except Exception as exc:  # noqa: BLE001
         raise _PressRefused(key) from exc
     if result.get("ok", True) is False:
@@ -133,6 +137,8 @@ def _press_or_raise(pending: state.Pending, key: str, repeat: int,
 
 
 def _reason_text(decision: "judge.Decision") -> str:
+    if getattr(decision, "delegate", False):
+        return "无推荐，代答『按照你的建议来』"
     if decision.fallback:
         return "无推荐，选了第一项"
     if "marked" in decision.reason:
@@ -210,9 +216,15 @@ def _answer_sequence(pending: state.Pending, reading: dict,
         try:
             if question.get("multiSelect"):
                 decision = deps.judge_multi_fn(question)
-                indices = list(decision.indices)
-                labels = [str(x) for x in decision.labels]
-                presses = screen.plan_multi(question, text, indices)
+                if decision.delegate:
+                    indices = []
+                    labels = [judge.DELEGATE_TEXT]
+                    presses = screen.plan_free_text(question, text,
+                                                    judge.DELEGATE_TEXT)
+                else:
+                    indices = list(decision.indices)
+                    labels = [str(x) for x in decision.labels]
+                    presses = screen.plan_multi(question, text, indices)
             else:
                 decision = deps.judge_fn(question)
                 indices = [decision.index]
@@ -418,6 +430,9 @@ def build_deps(appdata: Path, cfg: dict) -> Deps:
     def do_press(pending: state.Pending, key: str, repeat: int) -> dict:
         return pebrel_runtime.press(appdata, pending.pane_id, key, repeat)
 
+    def do_paste(pending: state.Pending, text: str) -> dict:
+        return pebrel_runtime.paste(appdata, pending.pane_id, text)
+
     def do_locate(session_id: str):
         return pebrel_runtime.locate(appdata, session_id)
 
@@ -432,14 +447,17 @@ def build_deps(appdata: Path, cfg: dict) -> Deps:
 
     from . import channels
 
-    def do_notify(message: str) -> None:
-        channels.send_all(channels.Notification(title="cc-autopilot-notify",
-                                                body=message), cfg)
+    def do_notify(message: "str | channels.Notification") -> None:
+        if not isinstance(message, channels.Notification):
+            message = channels.Notification(title="cc-autopilot-notify",
+                                            body=str(message))
+        channels.send_all(message, cfg)
 
     return Deps(read=do_read, press=do_press,
                 sample=presence.sample,
                 judge_fn=do_judge, judge_multi_fn=do_judge_multi,
-                notify=do_notify, locate=do_locate, agents=do_agents)
+                notify=do_notify, locate=do_locate, agents=do_agents,
+                paste=do_paste)
 
 
 def run(root: Path, cfg: dict, appdata: Path | None = None) -> None:
