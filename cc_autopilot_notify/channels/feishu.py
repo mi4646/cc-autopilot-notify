@@ -52,6 +52,9 @@ _COLORS = {
     "elicitation_url_dialog": "orange",
     "idle_prompt": "blue",
     "auto_answer": "green",
+    "auto_continue": "turquoise",
+    "continue_stage": "blue",
+    "continue_capped": "orange",
     "StopFailure": "red",
 }
 

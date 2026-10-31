@@ -31,6 +31,22 @@ class Notification:
     created_at: float = 0.0
 
 
+def first_line(text: str, limit: int = 60) -> str:
+    """The suggestion text as a card shows it: first line, hard-truncated.
+
+    The full text lives in the terminal/session; the card only needs to be
+    scannable on a phone. Blank input (matcher gave nothing readable) gets a
+    visible placeholder instead of an empty body.
+    """
+    line = (text or "").strip().splitlines()
+    first = line[0].strip() if line else ""
+    if not first:
+        return "(无文本建议)"
+    if len(first) > limit:
+        return first[:limit] + "…"
+    return first
+
+
 def title_with_project(title: str, cwd: str) -> str:
     """Prefix the event title with the project name when the cwd is known.
 

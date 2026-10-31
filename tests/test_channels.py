@@ -115,3 +115,19 @@ def test_feishu_card_renders_answer_lines_in_body():
     content = card["card"]["elements"][0]["text"]["content"]
     assert "Q: Pick one" in content
     assert "→ A（Claude 标记推荐）" in content
+
+
+def test_first_line_truncates():
+    assert channels.first_line("abc\ndef") == "abc"
+    assert channels.first_line("x" * 80) == "x" * 60 + "…"
+    assert channels.first_line("") == "(无文本建议)"
+    assert channels.first_line("   \n  ") == "(无文本建议)"
+
+
+def test_new_event_colors():
+    for event, color in (("auto_continue", "turquoise"),
+                         ("continue_stage", "blue"),
+                         ("continue_capped", "orange")):
+        card = channels.feishu._card(channels.Notification(
+            title="t", body="b", event=event))
+        assert card["card"]["header"]["template"] == color
