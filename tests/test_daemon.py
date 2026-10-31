@@ -168,6 +168,45 @@ def test_unlocatable_session_is_dropped_after_grace(tmp_path, caplog):
     assert caplog.text.count("never appeared") == 1, "no repeat after drop"
 
 
+def test_dead_pane_record_is_dropped(tmp_path):
+    """A pane that is gone from the agents snapshot will never come back."""
+    _seed(tmp_path, appeared=1000.0)
+    deps = _deps()
+    deps.read = lambda p: (_ for _ in ()).throw(
+        RuntimeError("pane.read refused: target_not_found pane 2 does not exist"))
+    deps.agents = lambda: [{"pane_id": 9, "agent": None}]
+    daemon.tick(1000.0 + 150, tmp_path, _cfg(), deps)
+    assert state.load_all(tmp_path) == []
+
+
+def test_read_outage_keeps_the_record(tmp_path):
+    """An unreachable runtime is not proof that the pane died."""
+    _seed(tmp_path, appeared=1000.0)
+    deps = _deps()
+    deps.read = lambda p: (_ for _ in ()).throw(RuntimeError("runtime unreachable"))
+
+    def outage():
+        raise RuntimeError("runtime unreachable")
+
+    deps.agents = outage
+    daemon.tick(1000.0 + 150, tmp_path, _cfg(), deps)
+    assert len(state.load_all(tmp_path)) == 1
+
+
+def test_read_failure_is_logged_at_most_once_per_window(tmp_path, caplog, monkeypatch):
+    import logging
+
+    monkeypatch.setattr(daemon, "_read_warned_at", {})
+    _seed(tmp_path, appeared=1000.0)
+    deps = _deps()
+    deps.read = lambda p: (_ for _ in ()).throw(RuntimeError("pane busy"))
+    deps.agents = lambda: [{"pane_id": 2, "agent": None}]  # still alive
+    with caplog.at_level(logging.WARNING):
+        for i in range(3):
+            daemon.tick(1000.0 + 150 + i, tmp_path, _cfg(), deps)
+    assert caplog.text.count("read failed") == 1
+
+
 def test_locate_failure_is_logged_at_most_once_per_window(tmp_path):
     """A transient runtime outage may persist for minutes; one line is enough."""
     import logging

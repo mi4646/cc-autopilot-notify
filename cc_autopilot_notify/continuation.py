@@ -119,18 +119,30 @@ def _card(pending: state.Pending, now: float, event: str, title: str,
         created_at=now)
 
 
+def pane_gone(pending: state.Pending, deps) -> bool | None:
+    """Whether the record's pane is definitively gone.
+
+    None means the agents snapshot itself could not be read: an outage is not
+    proof of death, so callers must keep the record.
+    """
+    try:
+        agents = deps.agents()
+    except Exception:  # noqa: BLE001
+        return None
+    return not any(int(a.get("pane_id", 0)) == pending.pane_id for a in agents)
+
+
 def _drop_if_pane_gone(pending: state.Pending, root: Path, deps: ContinueDeps,
                        exc: Exception) -> None:
     """A finished record whose pane is gone is dead: forget it instead of
     retrying every second for 24h. An outage (agents snapshot itself fails)
     keeps the record — only a definitive absence counts as death."""
-    try:
-        agents = deps.agents()
-    except Exception:  # noqa: BLE001
+    gone = pane_gone(pending, deps)
+    if gone is None:
         log.warning("continuation: read failed for %s (%s); agents unreachable, "
                     "keeping record", pending.session_id, exc)
         return
-    if any(int(a.get("pane_id", 0)) == pending.pane_id for a in agents):
+    if not gone:
         log.warning("continuation: read failed for %s (%s); pane alive, "
                     "keeping record", pending.session_id, exc)
         return

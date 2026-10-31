@@ -35,6 +35,7 @@ LOCATE_GRACE_SECONDS = 300.0
 # record is kept and only the log is throttled.
 LOCATE_WARN_EVERY_SECONDS = 600.0
 _locate_warned_at: dict[str, float] = {}
+_read_warned_at: dict[str, float] = {}
 
 # How long to let the panel redraw between steps of a multi-question answer.
 # The whole sequence runs inside one tick so our own keypresses cannot be
@@ -314,7 +315,18 @@ def _tick_one(pending: state.Pending, now: float, root: Path, cfg: dict,
     try:
         reading = deps.read(pending)
     except Exception as exc:  # noqa: BLE001 - one bad pane must not stop the loop
-        log.warning("daemon: read failed for %s (%s)", sid, exc)
+        # A pane that vanished from the agents snapshot is dead: drop the
+        # record instead of retrying it every second for 24h. An outage keeps
+        # it, and only the log line is throttled.
+        if continuation.pane_gone(pending, deps):
+            state.forget(sid, root)
+            log.info("daemon: %s pane %s is gone (%s); dropping record",
+                     sid, pending.pane_id, exc)
+        else:
+            last = _read_warned_at.get(sid)
+            if last is None or now - last >= LOCATE_WARN_EVERY_SECONDS:
+                _read_warned_at[sid] = now
+                log.warning("daemon: read failed for %s (%s)", sid, exc)
         return
 
     # The dialog gate. `conversation.read.prompt` never carries Claude Code's
