@@ -10,6 +10,9 @@ venv/
 config.json
 .env
 
+# 工具暂存（gstack 技能套件：session id、缓存、日志）
+.context/
+
 # 备份
 *.bak-*
 *.bak
