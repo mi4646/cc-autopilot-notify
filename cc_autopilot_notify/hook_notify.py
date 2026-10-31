@@ -10,7 +10,7 @@ longer notifies; `StopFailure` still does.
 Notification types are filtered too: only ones that need a human (or mark the
 end of a wait) are forwarded, and an identical message is suppressed for
 `notify.dedupe_seconds`. `idle_prompt` is the only type held back by
-`quiet_hours`; being blocked needs to reach the user even at night.
+`quiet_hours` now covers every kind: at night the daemon log is the record.
 """
 
 from __future__ import annotations

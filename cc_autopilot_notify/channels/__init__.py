@@ -67,7 +67,15 @@ _ORDER = ("feishu",)
 
 
 def send_all(n: Notification, cfg: dict) -> list[str]:
-    """Send to every enabled channel. Returns the names that failed."""
+    """Send to every enabled channel. Returns the names that failed.
+
+    Quiet hours (config `quiet_hours`) silence EVERYTHING here — continuation
+    cards, answer cards, approval prompts, even failures. Night is night; the
+    daemon log still has the full record for the morning. test-channel bypasses
+    this by calling module.send directly (cli.py), so diagnostics never mute.
+    """
+    if _config.in_quiet_hours(cfg):
+        return []
     channels_cfg = cfg.get("channels", {})
 
     failed: list[str] = []

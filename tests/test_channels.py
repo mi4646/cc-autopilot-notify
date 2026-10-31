@@ -131,3 +131,24 @@ def test_new_event_colors():
         card = channels.feishu._card(channels.Notification(
             title="t", body="b", event=event))
         assert card["card"]["header"]["template"] == color
+
+
+def test_send_all_suppresses_everything_in_quiet_window(monkeypatch):
+    """凌晨静默：窗口内所有通知（含审批/续跑/错误）都不出通道。"""
+    sent = []
+    monkeypatch.setattr(channels.feishu, "send", lambda n, w: sent.append(n))
+    cfg = {"channels": {"feishu": {"enabled": True, "webhook": "https://x"}},
+           "quiet_hours": {"enabled": True, "start": "00:00", "end": "09:00"}}
+    monkeypatch.setattr(channels._config, "in_quiet_hours", lambda cfg: True)
+    out = channels.send_all(channels.Notification(title="t", body="b"), cfg)
+    assert out == [] and sent == []
+
+
+def test_send_all_sends_outside_quiet_window(monkeypatch):
+    sent = []
+    monkeypatch.setattr(channels.feishu, "send", lambda n, w: sent.append(n))
+    cfg = {"channels": {"feishu": {"enabled": True, "webhook": "https://x"}},
+           "quiet_hours": {"enabled": True, "start": "00:00", "end": "09:00"}}
+    monkeypatch.setattr(channels._config, "in_quiet_hours", lambda cfg: False)
+    channels.send_all(channels.Notification(title="t", body="b"), cfg)
+    assert len(sent) == 1

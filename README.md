@@ -52,10 +52,11 @@ typing in another window keeps system idle at zero, so the timer does not run.
   (default 300).
 - `notify.message_translations` can replace exact notification messages before
   they are sent, for example `{"Claude is waiting for your input": "Claude 正在等待您的输入"}`.
-- `quiet_hours` silences `idle_prompt` inside the window; approval and error
-  notifications still get through. `start > end` wraps midnight, and equal or
-  malformed bounds allow everything — a mistyped window never costs a day of
-  alerts.
+- `quiet_hours` silences **every** notification inside the window — idle
+  prompts, approval cards, continuation cards, even failures; the daemon log
+  keeps the full record for the morning. `start > end` wraps midnight, and
+  equal or malformed bounds allow everything — a mistyped window never costs
+  a day of alerts.
 
 ## Lockscreen autopilot continuation
 

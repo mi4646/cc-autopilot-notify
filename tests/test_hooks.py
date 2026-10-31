@@ -1,4 +1,4 @@
-from cc_autopilot_notify import hook_pre_tool, hook_notify, state
+from cc_autopilot_notify import config, hook_pre_tool, hook_notify, state
 
 
 def _auq_event(pane=2):
@@ -286,3 +286,16 @@ def test_auq_record_preserves_continuation_state(tmp_path):
     p = state.load_all(tmp_path)[0]
     assert p.continue_count == 1 and p.finished_at == 100.0
     assert p.questions and p.questions[0].get("question") == "Q"  # 面板内容已更新
+
+
+def test_stop_failure_suppressed_in_quiet_window(tmp_path, monkeypatch):
+    """凌晨全静默：StopFailure 也走 send_all 的静默闸（穿过真实通道层）。"""
+    import cc_autopilot_notify.channels as channels
+    sent = []
+    monkeypatch.setattr(channels.feishu, "send", lambda n, w: sent.append(n))
+    monkeypatch.setattr(config, "in_quiet_hours", lambda cfg: True)
+    cfg = {"channels": {"feishu": {"enabled": True, "webhook": "https://x"}},
+           "quiet_hours": {"enabled": True, "start": "00:00", "end": "09:00"}}
+    rc = hook_notify.handle({"hook_event_name": "StopFailure", "session_id": "s1",
+                             "error": "boom"}, tmp_path, cfg)
+    assert rc == 0 and sent == []
