@@ -193,8 +193,8 @@ def test_press_refused_twice_gives_up(tmp_path):
     deps, presses, notified, _ = _counting_deps(
         [_pane_tail(""), _pane_tail("生成一下周报"), _pane_tail("生成一下周报"),
          _pane_tail("生成一下周报")], press_fails=True)
-    for i in range(4):  # 16s 间隔越过 settle 窗；两次注入尝试都被拒
-        _run(state.load_all(tmp_path)[0], deps, now=500.0 + i * 16, tmp=tmp_path)
+    for i in range(4):  # 32s 间隔越过 settle 窗；两次注入尝试都被拒
+        _run(state.load_all(tmp_path)[0], deps, now=500.0 + i * 32, tmp=tmp_path)
     p = state.load_all(tmp_path)[0]
     assert p.finished_at is None  # 放弃：回合状态清零
     assert notified and any("放弃" in n.body for n in notified)
@@ -329,8 +329,8 @@ def test_give_up_assertion_is_real(tmp_path):
     deps, presses, notified, _ = _counting_deps(
         [_pane_tail(""), _pane_tail("生成一下周报"), _pane_tail("生成一下周报"),
          _pane_tail("生成一下周报")], press_fails=True)
-    for i in range(4):  # 16s 间隔越过 settle 窗；两次注入尝试都被拒
-        _run(state.load_all(tmp_path)[0], deps, now=500.0 + i * 16, tmp=tmp_path)
+    for i in range(4):  # 32s 间隔越过 settle 窗；两次注入尝试都被拒
+        _run(state.load_all(tmp_path)[0], deps, now=500.0 + i * 32, tmp=tmp_path)
     p = state.load_all(tmp_path)[0]
     assert p.finished_at is None
     assert notified and any("放弃" in n.body for n in notified)

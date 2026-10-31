@@ -25,7 +25,10 @@ log = logging.getLogger(__name__)
 _SEP_RE = re.compile("─{10,}")
 
 PRESS_STEP_SECONDS = 0.3
-PRESSED_SETTLE_SECONDS = 15.0
+# One suggestion = one whole turn of Claude's work; pressing again sooner than
+# ~30s chases a turn that is still running. Verified live 2026-10-31 (the
+# "提交/推上去" cascade): 15s let submits stack up while earlier turns ran on.
+PRESSED_SETTLE_SECONDS = 30.0
 STAGE_WAIT_MARGIN_SECONDS = 30.0
 AUTO_SUBMIT_WINDOW_SECONDS = 10.0  # must match hook_notify's window; see spec §3.3
 

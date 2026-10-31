@@ -122,7 +122,9 @@ def _parse_sample(raw: str) -> tuple[str, float | None, bool | None]:
         if value is not None and 0.0 <= value < MAX_IDLE_SECONDS:
             idle = value
 
-    locked = {"0": False, "1": True}.get(locked_raw)
+    # WTS SessionFlags: 0=LOCKED, 1=UNLOCKED (verified live 2026-10-31: an
+    # unlocked desktop reports off16=1 and this mapping must yield False).
+    locked = {"0": True, "1": False}.get(locked_raw)
     return name, idle, locked
 
 
