@@ -250,3 +250,42 @@ def test_quiet_hours_invalid_bounds_allow():
     for start, end in (("9am", "17:00"), ("25:00", "17:00"), (None, "17:00")):
         cfg = {"quiet_hours": {"enabled": True, "start": start, "end": end}}
         assert config.in_quiet_hours(cfg, now=_at(3, 0)) is False
+
+
+def test_autopilot_defaults(tmp_path):
+    cfg = config.load(tmp_path / "absent.json")
+    assert config.continue_enabled(cfg) is False
+    assert config.shadow_mode(cfg) is True
+    assert config.max_continues(cfg) == 10
+    assert config.suggest_wait_seconds(cfg) == 90
+    assert config.failure_continues(cfg) == 2
+
+
+def test_autopilot_overrides(tmp_path):
+    cfg = _load(tmp_path, {"autopilot": {"continue_enabled": True,
+                                         "shadow_mode": False,
+                                         "max_continues": 3,
+                                         "suggest_wait_seconds": 120,
+                                         "failure_continues": 1}})
+    assert config.continue_enabled(cfg) is True
+    assert config.shadow_mode(cfg) is False
+    assert config.max_continues(cfg) == 3
+    assert config.suggest_wait_seconds(cfg) == 120
+    assert config.failure_continues(cfg) == 1
+
+
+def test_autopilot_invalid_values_raise(tmp_path):
+    p = tmp_path / "c.json"
+    p.write_text(json.dumps({"autopilot": {"max_continues": 0}}))
+    try:
+        config.load(p)
+    except config.ConfigError:
+        return
+    raise AssertionError("expected ConfigError")
+
+
+def test_autopilot_accessors_tolerate_non_dict_section():
+    """A hand-built cfg (tests, older callers) must not raise AttributeError."""
+    broken = {"autopilot": None}
+    assert config.continue_enabled(broken) is False
+    assert config.max_continues(broken) == 10

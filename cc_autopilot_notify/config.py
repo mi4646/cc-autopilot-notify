@@ -38,6 +38,9 @@ DEFAULTS: dict = {
     },
     "path_b": {"enabled": False},
     "daemon": {"enabled": True},
+    "autopilot": {"continue_enabled": False, "shadow_mode": True,
+                  "max_continues": 10, "suggest_wait_seconds": 90,
+                  "failure_continues": 2},
     "notify": {"dedupe_seconds": 300, "message_translations": {},
                "min_turn_seconds": 0},
     "quiet_hours": {"enabled": False, "start": "00:00", "end": "09:00"},
@@ -153,6 +156,12 @@ def _validate(cfg: dict) -> None:
     daemon = _require_object(cfg, "daemon")
     _require_bool(daemon, "enabled", "daemon.enabled")
 
+    autopilot = _require_object(cfg, "autopilot")
+    _require_bool(autopilot, "continue_enabled", "autopilot.continue_enabled")
+    _require_bool(autopilot, "shadow_mode", "autopilot.shadow_mode")
+    for name in ("max_continues", "suggest_wait_seconds", "failure_continues"):
+        _require_positive_int(autopilot, name, f"autopilot.{name}")
+
     notify = _require_object(cfg, "notify")
     dedupe = notify.get("dedupe_seconds")
     if not _is_int(dedupe) or dedupe < 0:
@@ -226,6 +235,26 @@ def feishu_webhook(cfg: dict) -> str | None:
 
 def path_b_enabled(cfg: dict) -> bool:
     return _section(cfg, "path_b").get("enabled") is True
+
+
+def continue_enabled(cfg: dict) -> bool:
+    return _section(cfg, "autopilot").get("continue_enabled") is True
+
+
+def shadow_mode(cfg: dict) -> bool:
+    return _section(cfg, "autopilot").get("shadow_mode", True) is True
+
+
+def max_continues(cfg: dict) -> int:
+    return int(_section(cfg, "autopilot").get("max_continues", 10))
+
+
+def suggest_wait_seconds(cfg: dict) -> int:
+    return int(_section(cfg, "autopilot").get("suggest_wait_seconds", 90))
+
+
+def failure_continues(cfg: dict) -> int:
+    return int(_section(cfg, "autopilot").get("failure_continues", 2))
 
 
 def daemon_enabled(cfg: dict) -> bool:
