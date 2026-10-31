@@ -49,7 +49,8 @@ def test_valid_pid_predicate():
 
 def test_spawns_when_heartbeat_stale(tmp_path):
     state.write_heartbeat(tmp_path, when=100.0, pid=7, plugin_root="/p")
-    assert daemon_control.should_spawn(tmp_path, "/p", now=130.0).action == "spawn"
+    now = 100.0 + daemon_control.POLL_STALE_SECONDS + 1
+    assert daemon_control.should_spawn(tmp_path, "/p", now=now).action == "spawn"
 
 
 def test_lock_is_exclusive(tmp_path):
@@ -123,12 +124,33 @@ def test_ensure_daemon_writes_status_to_stderr(tmp_path, monkeypatch, capsys):
 
 
 def test_stop_signals_heartbeat_pid(tmp_path, monkeypatch):
+    import errno
+
     state.write_heartbeat(tmp_path, when=time.time(), pid=99, plugin_root="/p")
     killed = []
     monkeypatch.setattr(daemon_control, "owns_pid", lambda pid: True)
+
+    def no_pidfd(pid):
+        raise OSError(errno.ENOSYS, "pidfd unsupported")
+
+    monkeypatch.setattr(daemon_control.os, "pidfd_open", no_pidfd, raising=False)
     monkeypatch.setattr(daemon_control.os, "kill", lambda pid, sig: killed.append(pid))
     assert daemon_control.stop(tmp_path) is True
     assert killed == [99]
+
+
+def test_stop_uses_pidfd_when_available(tmp_path, monkeypatch):
+    state.write_heartbeat(tmp_path, when=time.time(), pid=99, plugin_root="/p")
+    calls = []
+    monkeypatch.setattr(daemon_control, "owns_pid", lambda pid: True)
+    monkeypatch.setattr(daemon_control.os, "pidfd_open", lambda pid: 7, raising=False)
+    monkeypatch.setattr(
+        daemon_control.signal, "pidfd_send_signal",
+        lambda fd, sig: calls.append(("signal", fd, sig)), raising=False)
+    monkeypatch.setattr(daemon_control.os, "close",
+                        lambda fd: calls.append(("close", fd)))
+    assert daemon_control.stop(tmp_path) is True
+    assert calls == [("signal", 7, daemon_control.signal.SIGTERM), ("close", 7)]
 
 
 def test_stop_refuses_bool_zero_and_negative_pids(tmp_path, monkeypatch):

@@ -11,12 +11,17 @@ from __future__ import annotations
 import hashlib
 import json
 import socket
+import time
 from pathlib import Path
 
 PROTOCOL = "nebula.runtime"
 PROTOCOL_VERSION = 1
 _PORT_FILE = Path("Pebrel") / "runtime.port"
 _TIMEOUT = 5.0
+# A per-recv timeout is not a total budget: a server dripping one byte at a
+# time would keep the single-threaded daemon blocked forever.
+_TOTAL_TIMEOUT = 10.0
+_MAX_REPLY_BYTES = 1 << 20
 
 
 class RuntimeError(Exception):
@@ -64,8 +69,17 @@ def _call(appdata: Path, method: str, params: dict) -> dict:
         sock = socket.create_connection(("127.0.0.1", port), timeout=_TIMEOUT)
         sock.settimeout(_TIMEOUT)
         sock.sendall(line)
+        deadline = time.monotonic() + _TOTAL_TIMEOUT
         buf = b""
         while b"\n" not in buf:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise RuntimeError(
+                    f"Pebrel runtime timed out reading {method}")
+            if len(buf) > _MAX_REPLY_BYTES:
+                raise RuntimeError(
+                    f"Pebrel runtime reply too large for {method}")
+            sock.settimeout(max(0.1, remaining))
             chunk = sock.recv(1 << 20)
             if not chunk:
                 break

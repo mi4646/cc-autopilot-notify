@@ -107,6 +107,50 @@ def test_moves_legacy_webhook_even_when_config_has_one(tmp_path):
     assert "CC_AUTOPILOT_FEISHU_WEBHOOK" not in data.get("env", {})
 
 
+def test_refuses_a_non_object_hooks_section(tmp_path):
+    settings = _settings(tmp_path, {"hooks": "not-an-object"})
+    with pytest.raises(migrate.MigrationError):
+        migrate.migrate(settings, tmp_path / "config.json",
+                        tmp_path / "unit.service", run_systemctl=False)
+    assert json.loads(settings.read_text()) == {"hooks": "not-an-object"}
+
+
+def test_refuses_a_non_list_hook_event(tmp_path):
+    settings = _settings(tmp_path, {"hooks": {"Stop": "nope"}})
+    with pytest.raises(migrate.MigrationError):
+        migrate.migrate(settings, tmp_path / "config.json",
+                        tmp_path / "unit.service", run_systemctl=False)
+
+
+def test_follows_a_symlinked_settings_file(tmp_path):
+    real = tmp_path / "real.json"
+    real.write_text(json.dumps(
+        {"env": {"CC_AUTOPILOT_FEISHU_WEBHOOK": "https://old/x"}}))
+    link = tmp_path / "settings.json"
+    link.symlink_to(real)
+
+    migrate.migrate(link, tmp_path / "config.json",
+                    tmp_path / "unit.service", run_systemctl=False)
+
+    assert link.is_symlink(), "replacing the link would orphan the real file"
+    data = json.loads(real.read_text())
+    assert "CC_AUTOPILOT_FEISHU_WEBHOOK" not in data.get("env", {})
+
+
+def test_does_not_touch_systemd_for_a_throwaway_unit(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(migrate.subprocess, "run",
+                        lambda *a, **k: calls.append(a))
+    unit = tmp_path / "unit.service"
+    unit.write_text("[Service]\n# cc_autopilot_notify\n")
+    settings = _settings(tmp_path, {"hooks": {}})
+
+    migrate.migrate(settings, tmp_path / "config.json", unit,
+                    run_systemctl=True)
+
+    assert calls == [], "a unit outside the systemd user dir must not reach systemctl"
+
+
 def test_unit_removed_only_with_our_marker(tmp_path):
     unit = tmp_path / "unit.service"
     unit.write_text("ExecStart=python3 -m cc_autopilot_notify.cli daemon\n")

@@ -58,6 +58,8 @@ def handle(event: dict, root: Path, cfg: dict) -> int:
               if isinstance(o, dict)]
     body = str(first.get("question") or "")[:300]
 
+    # This hook runs before the dialog is drawn. The channel timeout must stay
+    # well below the hook timeout, or a slow webhook delays the question.
     channels.send_all(
         channels.Notification(
             title=channels.title_with_project("Claude 在等你回答",
@@ -70,6 +72,7 @@ def handle(event: dict, root: Path, cfg: dict) -> int:
             options=[str(x) for x in labels[:6]],
         ),
         cfg,
+        timeout=2.0,
     )
     return 0
 

@@ -37,6 +37,26 @@ def test_feishu_card_neutralises_at_tags_and_links():
     assert "](" not in content
 
 
+def test_feishu_reply_is_size_limited(monkeypatch):
+    class Response:
+        status = 200
+
+        def read(self, n=-1):
+            # Old code called read() with no limit; new code must cap it.
+            return b"x" * (n if isinstance(n, int) and n > 0 else 100)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    monkeypatch.setattr(channels.feishu.urllib.request, "urlopen",
+                        lambda *a, **k: Response())
+    with pytest.raises(channels.feishu.FeishuError, match="too large"):
+        channels.feishu.send(_n(), "https://example.invalid/hook")
+
+
 def test_feishu_error_never_echoes_the_webhook():
     """The token lives in the URL path; an exception must not leak it."""
     secret = "https://open.feishu.cn/open-apis/bot/v2/hook/SECRET TOKEN"
@@ -57,7 +77,8 @@ def test_send_all_reports_failures_without_raising(monkeypatch):
 
 def test_disabled_channel_is_not_called(monkeypatch):
     called = []
-    monkeypatch.setattr(channels.feishu, "send", lambda n, w: called.append("f"))
+    monkeypatch.setattr(channels.feishu, "send",
+                        lambda n, w, **k: called.append("f"))
     cfg = {"channels": {"feishu": {"enabled": False}}}
     assert channels.send_all(_n(), cfg) == []
     assert called == []
@@ -156,7 +177,8 @@ def test_new_event_colors():
 def test_send_all_suppresses_everything_in_quiet_window(monkeypatch):
     """凌晨静默：窗口内所有通知（含审批/续跑/错误）都不出通道。"""
     sent = []
-    monkeypatch.setattr(channels.feishu, "send", lambda n, w: sent.append(n))
+    monkeypatch.setattr(channels.feishu, "send",
+                        lambda n, w, **k: sent.append(n))
     cfg = {"channels": {"feishu": {"enabled": True, "webhook": "https://x"}},
            "quiet_hours": {"enabled": True, "start": "00:00", "end": "09:00"}}
     monkeypatch.setattr(channels._config, "in_quiet_hours", lambda cfg: True)
@@ -166,7 +188,8 @@ def test_send_all_suppresses_everything_in_quiet_window(monkeypatch):
 
 def test_send_all_sends_outside_quiet_window(monkeypatch):
     sent = []
-    monkeypatch.setattr(channels.feishu, "send", lambda n, w: sent.append(n))
+    monkeypatch.setattr(channels.feishu, "send",
+                        lambda n, w, **k: sent.append(n))
     cfg = {"channels": {"feishu": {"enabled": True, "webhook": "https://x"}},
            "quiet_hours": {"enabled": True, "start": "00:00", "end": "09:00"}}
     monkeypatch.setattr(channels._config, "in_quiet_hours", lambda cfg: False)

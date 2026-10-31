@@ -126,12 +126,32 @@ def _is_our_hook(hook: dict) -> bool:
 
 def _without_our_hooks(data: dict) -> int:
     removed = 0
-    hooks = data.get("hooks") or {}
+    hooks = data.get("hooks")
+    if hooks is None:
+        return 0
+    if not isinstance(hooks, dict):
+        raise MigrationError("refusing to touch settings: hooks is not an object")
     for event in list(hooks):
+        items = hooks[event]
+        if items is None:
+            continue
+        if not isinstance(items, list):
+            raise MigrationError(
+                f"refusing to touch settings: hooks.{event} is not a list")
         kept = []
-        for item in hooks[event] or []:
-            inner = item.get("hooks") or []
-            kept_inner = [h for h in inner if not _is_our_hook(h)]
+        for item in items:
+            if not isinstance(item, dict):
+                raise MigrationError(
+                    f"refusing to touch settings: hooks.{event} has a non-object entry")
+            inner = item.get("hooks")
+            if inner is None:
+                kept.append(item)
+                continue
+            if not isinstance(inner, list):
+                raise MigrationError(
+                    f"refusing to touch settings: hooks.{event}[].hooks is not a list")
+            kept_inner = [h for h in inner
+                          if not (isinstance(h, dict) and _is_our_hook(h))]
             removed_here = len(inner) - len(kept_inner)
             removed += removed_here
             if removed_here and not kept_inner:
@@ -157,7 +177,11 @@ def _stop_unit(unit: Path, run_systemctl: bool) -> bool:
         return False
     if "cc_autopilot_notify" not in text:
         return False
-    if run_systemctl:
+    # The service name is global. Touching systemd for a throwaway unit (tests,
+    # dry runs, CC_AUTOPILOT_UNIT pointing at /tmp) would stop the real one.
+    systemd_user = Path(os.environ.get("XDG_CONFIG_HOME")
+                        or Path.home() / ".config") / "systemd" / "user"
+    if run_systemctl and unit.parent.resolve() == systemd_user.resolve():
         try:
             result = subprocess.run(
                 ["systemctl", "--user", "disable", "--now", unit.name],
@@ -179,8 +203,16 @@ def _stop_unit(unit: Path, run_systemctl: bool) -> bool:
 def migrate(settings: Path, config_path: Path, unit: Path,
             *, run_systemctl: bool = True) -> str:
     settings, config_path, unit = Path(settings), Path(config_path), Path(unit)
+    # Dotfiles users often symlink settings.json. Replacing the link would
+    # silently turn it into a regular file and orphan the real target.
+    settings = settings.resolve() if settings.is_symlink() else settings
+    config_path = config_path.resolve() if config_path.is_symlink() else config_path
+    unit = unit.resolve() if unit.is_symlink() else unit
+
     data = _read_json(settings)            # aborts before any write
     env = data.get("env") or {}
+    if not isinstance(env, dict):
+        raise MigrationError(f"refusing to touch {settings}: env is not an object")
     legacy_webhook = env.get(WEBHOOK_ENV)
     legacy_afk = env.get(AFK_KEY)
 
@@ -200,7 +232,13 @@ def migrate(settings: Path, config_path: Path, unit: Path,
     if isinstance(legacy_webhook, str) and legacy_webhook:
         cfg = _read_json(config_path)      # also aborts before any write
         channels = cfg.setdefault("channels", {})
+        if not isinstance(channels, dict):
+            raise MigrationError(
+                f"refusing to touch {config_path}: channels is not an object")
         feishu = channels.setdefault("feishu", {})
+        if not isinstance(feishu, dict):
+            raise MigrationError(
+                f"refusing to touch {config_path}: channels.feishu is not an object")
         if not feishu.get("webhook"):
             feishu["webhook"] = legacy_webhook
             config_data = cfg

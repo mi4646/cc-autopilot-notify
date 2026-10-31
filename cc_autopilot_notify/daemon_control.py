@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import dataclasses
+import errno
 import fcntl
 import json
 import logging
@@ -17,7 +18,11 @@ from . import state
 
 log = logging.getLogger(__name__)
 
-POLL_STALE_SECONDS = 15.0
+# A tick can spend ~70s answering a multi-question panel (12 steps × read +
+# 0.3s sleep, plus presence and socket timeouts). At 15s a healthy daemon was
+# judged stale mid-tick; the lock still prevented a duplicate, but the
+# spawn/die churn was noisy.
+POLL_STALE_SECONDS = 90.0
 LOCK_NAME = "daemon.lock"
 LOG_NAME = "daemon.log"
 LOG_MAX_BYTES = 5 * 1024 * 1024
@@ -116,11 +121,28 @@ def start(root: Path, plugin_root: str) -> int:
     return proc.pid
 
 
-def stop(root: Path) -> bool:
-    hb = state.read_heartbeat(root)
-    pid = valid_pid((hb or {}).get("pid"))
-    if pid is None:
-        return False
+def _send_term(pid: int) -> bool:
+    """Signal `pid` without a reuse race, using pidfd where the kernel has it."""
+    pidfd_open = getattr(os, "pidfd_open", None)
+    pidfd_send = getattr(signal, "pidfd_send_signal", None)
+    if pidfd_open is not None and pidfd_send is not None:
+        try:
+            fd = pidfd_open(pid)
+        except OSError as exc:
+            if exc.errno not in (errno.ENOSYS, errno.EINVAL):
+                log.warning("daemon_control: cannot open pid %s (%s)", pid, exc)
+                return False
+        else:
+            try:
+                pidfd_send(fd, signal.SIGTERM)
+            except OSError as exc:
+                log.warning("daemon_control: cannot stop pid %s (%s)", pid, exc)
+                return False
+            finally:
+                os.close(fd)
+            return True
+    # Fallback for kernels without pidfd: re-check identity immediately before
+    # signalling, which narrows the window rather than closing it.
     if not owns_pid(pid):
         log.warning("daemon_control: refusing to signal pid %s: "
                     "process identity not confirmed", pid)
@@ -131,6 +153,18 @@ def stop(root: Path) -> bool:
         log.warning("daemon_control: cannot stop pid %s (%s)", pid, exc)
         return False
     return True
+
+
+def stop(root: Path) -> bool:
+    hb = state.read_heartbeat(root)
+    pid = valid_pid((hb or {}).get("pid"))
+    if pid is None:
+        return False
+    if not owns_pid(pid):
+        log.warning("daemon_control: refusing to signal pid %s: "
+                    "process identity not confirmed", pid)
+        return False
+    return _send_term(pid)
 
 
 def wait_gone(pid: int, timeout: float = 5.0) -> bool:

@@ -12,6 +12,13 @@ def _env(tmp_path, monkeypatch, payload):
     monkeypatch.setattr("sys.stdin", io.StringIO("{}"))
 
 
+def test_usage_error_does_not_block_a_tool():
+    from cc_autopilot_notify import run_hook
+
+    # PreToolUse treats exit 2 as "block"; a typo must never wedge the turn.
+    assert run_hook.main(["bogus"]) == 0
+
+
 def test_run_hook_honours_the_top_level_switch(tmp_path, monkeypatch):
     _env(tmp_path, monkeypatch, {"enabled": False})
     called = []

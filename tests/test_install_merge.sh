@@ -234,3 +234,31 @@ ls "$B"/settings.json.bak-* >/dev/null 2>&1 \
   || { echo "uninstall wrote no backup"; exit 1; }
 rm -rf "$B"
 echo "OK: uninstall backs up settings.json"
+
+# --- install preserves the settings file mode --------------------------
+M=$(mktemp -d)
+printf '%s' '{"hooks": {}}' > "$M/settings.json"
+chmod 640 "$M/settings.json"
+CC_AUTOPILOT_SETTINGS="$M/settings.json" CC_AUTOPILOT_CONFIG="$M/config.json" \
+  CC_AUTOPILOT_UNIT="$M/unit.service" "$REPO/install.sh" >/dev/null
+[ "$(stat -c '%a' "$M/settings.json")" = "640" ] \
+  || { echo "install changed settings.json mode"; exit 1; }
+rm -rf "$M"
+echo "OK: install preserves settings.json mode"
+
+# --- a failed config write leaves settings untouched -------------------
+P=$(mktemp -d)
+printf '%s' '{"hooks": {"Stop": [{"hooks": [{"command": "keep-me"}]}]}}' \
+  > "$P/settings.json"
+cp "$P/settings.json" "$P/settings.before"
+mkdir "$P/ro"
+chmod 500 "$P/ro"
+if CC_AUTOPILOT_SETTINGS="$P/settings.json" CC_AUTOPILOT_CONFIG="$P/ro/config.json" \
+     CC_AUTOPILOT_UNIT="$P/unit.service" "$REPO/install.sh" >/dev/null 2>&1; then
+  chmod 700 "$P/ro"; echo "install succeeded despite an unwritable config"; exit 1
+fi
+chmod 700 "$P/ro"
+cmp -s "$P/settings.json" "$P/settings.before" \
+  || { echo "settings was replaced before the config write succeeded"; exit 1; }
+rm -rf "$P"
+echo "OK: a failed config write leaves settings untouched"

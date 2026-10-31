@@ -138,8 +138,10 @@ def _validate(cfg: dict) -> None:
             f"channels.feishu.webhook_env must be an env var name, got {env!r}")
     webhook = feishu.get("webhook")
     if webhook is not None and not isinstance(webhook, str):
+        # Never echo the value: a mis-shaped webhook IS the credential.
         raise ConfigError(
-            f"channels.feishu.webhook must be a URL string or null, got {webhook!r}")
+            "channels.feishu.webhook must be a URL string or null, got "
+            f"{type(webhook).__name__}")
 
     quiet = _require_object(cfg, "quiet_hours")
     _require_bool(quiet, "enabled", "quiet_hours.enabled")
@@ -227,7 +229,9 @@ def feishu_webhook(cfg: dict) -> str | None:
     env_name = feishu.get("webhook_env")
     if not env_name:
         return None
-    return os.environ.get(env_name) or None
+    # `$(cat file)` commonly leaves a trailing newline; it makes the URL
+    # invalid and the send fail silently.
+    return (os.environ.get(env_name) or "").strip() or None
 
 
 def path_b_enabled(cfg: dict) -> bool:
@@ -311,7 +315,21 @@ def write_default(path: Path) -> None:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             json.dump(copy.deepcopy(DEFAULTS), handle, ensure_ascii=False, indent=2)
         os.chmod(tmp, 0o600)
-        os.replace(tmp, path)
+        try:
+            # link() fails if the target appeared meanwhile, so a config the
+            # user wrote in that window is never overwritten.
+            os.link(tmp, path)
+        except FileExistsError:
+            pass
+        except OSError:
+            # Filesystems without hard links: atomic replace is still better
+            # than a half-written file, at the cost of the tiny race window.
+            os.replace(tmp, path)
+        finally:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
     except BaseException:
         try:
             os.unlink(tmp)

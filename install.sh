@@ -32,7 +32,7 @@ fi
 
 # Projected settings go to stdout; nothing is written in dry-run mode.
 PROJECTED=$(mktemp)
-trap 'rm -f "$PROJECTED"' EXIT
+trap 'rm -f "${PROJECTED:-}" "${UNIT_TMP:-}"' EXIT
 
 python3 - "$SETTINGS" "$REPO" "$AFK_MS" > "$PROJECTED" <<'PY'
 import json, os, shlex, sys
@@ -121,17 +121,15 @@ if [ "${CC_AUTOPILOT_DRY_RUN:-}" = "1" ]; then
   exit 0
 fi
 
-# Back up, then write the merged settings.
+# Prepare everything that can fail BEFORE the settings file is replaced: a
+# failed config or unit write must not leave hooks installed against a
+# missing daemon.
 STAMP=$(date +%Y%m%d-%H%M%S)
+mkdir -p "$(dirname "$SETTINGS")" "$(dirname "$CONFIG")" "$(dirname "$UNIT")"
 if [ -f "$SETTINGS" ]; then
   cp "$SETTINGS" "$SETTINGS.bak-$STAMP"
   echo "backed up settings to $SETTINGS.bak-$STAMP"
 fi
-mkdir -p "$(dirname "$SETTINGS")"
-mv "$PROJECTED" "$SETTINGS"
-
-# Config file, backed up when present.
-mkdir -p "$(dirname "$CONFIG")"
 if [ -f "$CONFIG" ]; then
   cp "$CONFIG" "$CONFIG.bak-$STAMP"
   echo "backed up config to $CONFIG.bak-$STAMP"
@@ -150,8 +148,8 @@ else
 fi
 
 # systemd user unit: Pebrel is a Windows process, so it cannot host this.
-mkdir -p "$(dirname "$UNIT")"
-cat > "$UNIT" <<UNIT
+UNIT_TMP="$UNIT.tmp-$$"
+cat > "$UNIT_TMP" <<UNIT
 [Unit]
 Description=cc-autopilot-notify daemon
 After=default.target
@@ -167,6 +165,30 @@ Environment="PYTHONPATH=$REPO"
 [Install]
 WantedBy=default.target
 UNIT
+
+# Commit settings atomically inside its own directory. /tmp is often a
+# different filesystem, where mv is copy+delete and can leave a truncated
+# file; mkstemp is 0600, so carry the original mode over.
+python3 - "$PROJECTED" "$SETTINGS" <<'PY'
+import os, stat, sys, tempfile
+src, dest = sys.argv[1], sys.argv[2]
+mode = stat.S_IMODE(os.stat(dest).st_mode) if os.path.exists(dest) else 0o644
+fd, tmp = tempfile.mkstemp(dir=os.path.dirname(os.path.abspath(dest)),
+                           prefix=".settings-", suffix=".json")
+try:
+    with os.fdopen(fd, "w", encoding="utf-8") as out, \
+            open(src, encoding="utf-8") as fh:
+        out.write(fh.read())
+    os.chmod(tmp, mode)
+    os.replace(tmp, dest)
+except BaseException:
+    try:
+        os.unlink(tmp)
+    except OSError:
+        pass
+    raise
+PY
+mv "$UNIT_TMP" "$UNIT"
 echo "wrote $UNIT"
 
 # Only touch systemd when the unit really lives in the systemd user dir. A

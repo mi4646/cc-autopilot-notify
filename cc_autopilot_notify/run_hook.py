@@ -28,7 +28,9 @@ def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     if len(argv) != 1 or argv[0] not in _MODULES:
         print(f"usage: run_hook.py {{{'|'.join(_MODULES)}}}", file=sys.stderr)
-        return 2
+        # Exit 2 means "block the tool" for PreToolUse; a usage mistake must
+        # never wedge Claude Code.
+        return 0
     module = __import__(f"cc_autopilot_notify.{_MODULES[argv[0]]}", fromlist=["main"])
     return module.main()
 

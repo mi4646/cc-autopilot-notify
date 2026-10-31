@@ -66,7 +66,7 @@ def title_with_project(title: str, cwd: str) -> str:
 _ORDER = ("feishu",)
 
 
-def send_all(n: Notification, cfg: dict) -> list[str]:
+def send_all(n: Notification, cfg: dict, *, timeout: float = 10.0) -> list[str]:
     """Send to every enabled channel. Returns the names that failed.
 
     Quiet hours (config `quiet_hours`) silence EVERYTHING here — continuation
@@ -92,7 +92,7 @@ def send_all(n: Notification, cfg: dict) -> list[str]:
                 if not webhook:
                     log.debug("channels: feishu enabled but no webhook configured")
                     continue
-                module.send(n, webhook)
+                module.send(n, webhook, timeout=timeout)
         except Exception as exc:  # noqa: BLE001 - best effort by design
             log.warning("channels: %s failed (%s)", name, exc)
             failed.append(name)

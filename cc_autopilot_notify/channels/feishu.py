@@ -20,6 +20,9 @@ from ..project import project_name
 log = logging.getLogger(__name__)
 
 
+_MAX_REPLY_BYTES = 64 * 1024
+
+
 class FeishuError(Exception):
     """The webhook did not accept the message."""
 
@@ -120,7 +123,11 @@ def send(n, webhook: str, timeout: float = 10) -> None:
             method="POST",
         )
         with urllib.request.urlopen(request, timeout=timeout) as response:
-            body = response.read().decode("utf-8", errors="replace")
+            # A slow-drip endpoint must not fill memory or pin the daemon.
+            raw = response.read(_MAX_REPLY_BYTES + 1)
+            if len(raw) > _MAX_REPLY_BYTES:
+                raise FeishuError("reply too large")
+            body = raw.decode("utf-8", errors="replace")
             check_response(response.status, body)
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")

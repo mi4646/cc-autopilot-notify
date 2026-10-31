@@ -1,4 +1,6 @@
-from cc_autopilot_notify import config, hook_pre_tool, hook_notify, state
+from cc_autopilot_notify import (config, hook_permission, hook_pre_tool,
+                                 hook_notify, judge, state)
+from cc_autopilot_notify.judge import Decision
 
 
 def _auq_event(pane=2):
@@ -27,16 +29,41 @@ def test_malformed_event_returns_zero(tmp_path):
 
 def test_notification_channel_failure_still_returns_zero(tmp_path, monkeypatch):
     import cc_autopilot_notify.channels as channels
-    monkeypatch.setattr(channels, "send_all", lambda n, c: ["feishu"])
+    monkeypatch.setattr(channels, "send_all", lambda n, c, **k: ["feishu"])
     cfg = {"channels": {"terminal": {"enabled": True}}, "thresholds": {}}
     assert hook_pre_tool.handle(_auq_event(), tmp_path, cfg) == 0
+
+
+def test_permission_judge_uses_the_configured_budget(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(
+        hook_permission, "answer",
+        lambda event, wait_seconds, judge_fn: captured.update(fn=judge_fn) or None)
+
+    def fake_pick(question, **kwargs):
+        captured["kwargs"] = kwargs
+        return Decision(indices=(0,), labels=("A",), reason="model", fallback=False)
+
+    monkeypatch.setattr(hook_permission.judge, "pick", fake_pick)
+    monkeypatch.setenv("CC_AUTOPILOT_HOOK_TIMEOUT", "10")
+    cfg = {"judge": {"timeout_ms": 8000, "fallback": "delegate"},
+           "thresholds": {"background_seconds": 90}}
+    hook_permission.handle(
+        {"tool_name": "AskUserQuestion",
+         "tool_input": {"questions": [{"question": "Q",
+                                       "options": [{"label": "A"}]}]}},
+        None, cfg)
+    captured["fn"]({"question": "Q", "options": [{"label": "A"}]})
+    assert captured["kwargs"]["fallback"] == "delegate"
+    assert captured["kwargs"]["timeout"] <= 4.0
 
 
 def test_unwritable_state_dir_still_sends(tmp_path, monkeypatch):
     import cc_autopilot_notify.channels as channels
 
     seen = []
-    monkeypatch.setattr(channels, "send_all", lambda n, c: seen.append(n) or [])
+    monkeypatch.setattr(channels, "send_all",
+                        lambda n, c, **k: seen.append(n) or [])
     root = tmp_path / "state"
     root.write_text("not a directory")
     ev = {"hook_event_name": "Notification", "session_id": "s1",
@@ -48,7 +75,8 @@ def test_unwritable_state_dir_still_sends(tmp_path, monkeypatch):
 def _capture(monkeypatch):
     import cc_autopilot_notify.channels as channels
     seen = []
-    monkeypatch.setattr(channels, "send_all", lambda n, c: seen.append(n) or [])
+    monkeypatch.setattr(channels, "send_all",
+                        lambda n, c, **k: seen.append(n) or [])
     return seen
 
 
@@ -266,7 +294,8 @@ def test_stop_marks_finished(tmp_path):
 
 
 def test_stop_failure_marks_finished_failed(tmp_path, monkeypatch):
-    monkeypatch.setattr("cc_autopilot_notify.channels.send_all", lambda n, c: [])
+    monkeypatch.setattr("cc_autopilot_notify.channels.send_all",
+                        lambda n, c, **k: [])
     rc = hook_notify.handle({"hook_event_name": "StopFailure", "session_id": "s1",
                              "error": "boom"}, tmp_path, _cfg())
     assert rc == 0

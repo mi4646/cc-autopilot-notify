@@ -80,8 +80,19 @@ def handle(event: dict, root, cfg: dict) -> int:
     # before that or the hook is killed mid-block having answered nothing.
     hook_timeout = float(os.environ.get("CC_AUTOPILOT_HOOK_TIMEOUT", "180"))
     wait = min(config.background_seconds(cfg), max(hook_timeout - 10.0, 0.0))
-    payload = answer(event, wait_seconds=wait,
-                     judge_fn=lambda q: judge.pick(q, model=config.judge_model(cfg)))
+    # Judging happens after the wait. Its budget must fit inside what is left
+    # of the hook's own timeout, or Claude Code kills the hook mid-answer.
+    deadline = time.monotonic() + max(hook_timeout - 2.0, 0.0)
+    judge_timeout = config.judge_timeout_seconds(cfg)
+
+    def judge_fn(question):
+        remaining = max(0.5, deadline - time.monotonic())
+        # pick() retries once, so each attempt gets half the remaining budget.
+        return judge.pick(question, model=config.judge_model(cfg),
+                          timeout=min(judge_timeout, remaining / 2),
+                          fallback=config.judge_fallback(cfg))
+
+    payload = answer(event, wait_seconds=wait, judge_fn=judge_fn)
     if payload is not None:
         print(json.dumps(payload))
     return 0

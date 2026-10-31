@@ -3,7 +3,24 @@ import json
 import os
 import stat
 
+import pytest
+
 from cc_autopilot_notify import config
+
+
+def test_env_webhook_is_stripped(tmp_path, monkeypatch):
+    monkeypatch.setenv("CC_AUTOPILOT_FEISHU_WEBHOOK", " https://example/x\n")
+    cfg = _load(tmp_path, {"channels": {"feishu": {"webhook": None}}})
+    assert config.feishu_webhook(cfg) == "https://example/x"
+
+
+def test_invalid_webhook_value_is_not_echoed(tmp_path):
+    p = tmp_path / "c.json"
+    p.write_text(json.dumps(
+        {"channels": {"feishu": {"webhook": {"secret": "SECRET-VALUE"}}}}))
+    with pytest.raises(config.ConfigError) as exc:
+        config.load(p)
+    assert "SECRET-VALUE" not in str(exc.value)
 
 
 def test_enabled_switch_reads_false(tmp_path):
