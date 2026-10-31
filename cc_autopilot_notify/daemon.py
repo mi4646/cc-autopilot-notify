@@ -405,7 +405,8 @@ def _continue_deps(deps: Deps, gate: "PresenceGate", now: float) -> "continuatio
         read=deps.read, press=deps.press,
         cached_presence=lambda: gate.get(now, deps),
         fresh_presence=deps.sample,  # bypasses the 5s gate cache: fresh lock
-        pane_owner_ok=owner_ok, notify=deps.notify, sleep=deps.sleep)
+        pane_owner_ok=owner_ok, agents=deps.agents,
+        notify=deps.notify, sleep=deps.sleep)
 
 
 def build_deps(appdata: Path, cfg: dict) -> Deps:

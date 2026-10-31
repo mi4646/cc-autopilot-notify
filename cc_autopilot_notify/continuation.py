@@ -89,6 +89,7 @@ class ContinueDeps:
     cached_presence: Callable[[], "presence.Presence | None"]
     fresh_presence: Callable[[], "presence.Presence | None"]
     pane_owner_ok: Callable[[state.Pending], bool]
+    agents: Callable[[], list]
     notify: Callable[[object], None]
     sleep: Callable[[float], None]
 
@@ -115,6 +116,26 @@ def _card(pending: state.Pending, now: float, event: str, title: str,
         created_at=now)
 
 
+def _drop_if_pane_gone(pending: state.Pending, root: Path, deps: ContinueDeps,
+                       exc: Exception) -> None:
+    """A finished record whose pane is gone is dead: forget it instead of
+    retrying every second for 24h. An outage (agents snapshot itself fails)
+    keeps the record — only a definitive absence counts as death."""
+    try:
+        agents = deps.agents()
+    except Exception:  # noqa: BLE001
+        log.warning("continuation: read failed for %s (%s); agents unreachable, "
+                    "keeping record", pending.session_id, exc)
+        return
+    if any(int(a.get("pane_id", 0)) == pending.pane_id for a in agents):
+        log.warning("continuation: read failed for %s (%s); pane alive, "
+                    "keeping record", pending.session_id, exc)
+        return
+    log.info("continuation: %s pane %s is gone (%s); dropping record",
+             pending.session_id, pending.pane_id, exc)
+    state.forget(pending.session_id, root)
+
+
 def handle(pending: state.Pending, now: float, root: Path, cfg: dict,
            deps: ContinueDeps) -> list[str]:
     """One continuation decision for a finished session. Spec §3.3; the lock
@@ -129,7 +150,7 @@ def handle(pending: state.Pending, now: float, root: Path, cfg: dict,
     try:
         reading = deps.read(pending)
     except Exception as exc:  # noqa: BLE001 - one bad pane must not stop the loop
-        log.warning("continuation: read failed for %s (%s)", pending.session_id, exc)
+        _drop_if_pane_gone(pending, root, deps, exc)
         return []
     if pending.questions or reading.get("state") != "finished":
         return []  # an open question outranks continuation; a running turn is not ours

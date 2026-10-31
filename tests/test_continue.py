@@ -79,6 +79,7 @@ def _deps(suggestion=True, locked=True, state_name="finished", presses=None,
         fresh_presence = staticmethod(lambda: presence.Presence(
             foreground=False, idle_seconds=500.0, locked=locked))
         pane_owner_ok = staticmethod(lambda pending: owner_ok)
+        agents = staticmethod(lambda: [{"pane_id": 2, "agent": {"session_id": "s1"}}])
         notify = staticmethod(lambda n: notified.append(n))
         sleep = staticmethod(lambda s: None)
     return D(), press_calls, notified
@@ -224,6 +225,7 @@ def _counting_deps(suggestion_texts, locked=True, owner=True, press_fails=False)
         cached_presence = staticmethod(lambda: presence.Presence(
             False, 500.0, locked))
         pane_owner_ok = staticmethod(lambda pending: owner)
+        agents = staticmethod(lambda: [{"pane_id": 2, "agent": {"session_id": "s1"}}])
         notify = staticmethod(lambda n: notified.append(n))
         sleep = staticmethod(lambda s: None)
     return D(), presses, notified, fresh_calls
@@ -332,3 +334,34 @@ def test_give_up_assertion_is_real(tmp_path):
     p = state.load_all(tmp_path)[0]
     assert p.finished_at is None
     assert notified and any("放弃" in n.body for n in notified)
+
+
+def test_read_failure_with_dead_pane_forgets_record(tmp_path):
+    """pane 已不在 agents 快照 = 会话死亡，记录必须清掉而不是每秒重试。"""
+    state.record(_pending(), tmp_path)
+    deps, presses, notified, _ = _counting_deps([_pane_tail("")])
+
+    def dead_read(pending):
+        raise RuntimeError("target_not_found pane 2 does not exist")
+
+    deps.read = dead_read
+    deps.agents = staticmethod(lambda: [{"pane_id": 9, "agent": None}])  # 本 pane 不在
+    out = _run(state.load_all(tmp_path)[0], deps, tmp=tmp_path)
+    assert state.load_all(tmp_path) == []  # 记录被清
+
+
+def test_read_failure_during_outage_keeps_record(tmp_path):
+    """agents 快照本身取不到 = 运行时故障，不得误清记录。"""
+    state.record(_pending(), tmp_path)
+    deps, presses, notified, _ = _counting_deps([_pane_tail("")])
+
+    def dead_read(pending):
+        raise RuntimeError("target_not_found pane 2 does not exist")
+
+    def outage_agents():
+        raise RuntimeError("runtime unreachable")
+
+    deps.read = dead_read
+    deps.agents = outage_agents
+    _run(state.load_all(tmp_path)[0], deps, tmp=tmp_path)
+    assert state.load_all(tmp_path) != []  # 故障期间保留
