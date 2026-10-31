@@ -284,7 +284,7 @@ def test_press_refused_twice_gives_up(...)   # 复用 daemon._PressRefused 语�
 
 **Interfaces:**
 - Consumes: Task 8 `ContinueDeps`/`handle`、Task 3 `presence.sample`（`fresh_presence` 即再采一次）。
-- Produces: daemon tick 内——有 `finished_at` 的记录走 continue 分支（在 attention 应答分支之前判断 `finished_at`）；doctor 增两行：`lock state`（当前 locked 值或 UNKNOWN）与 canary 统计（近 24h finished 段中 pane 尾部含 tab 字样但 matcher 为 None 的次数；统计源：daemon 写入的日志聚合文件或 state 计数，实现取简者）。
+- Produces: daemon tick 内——有 `finished_at` 的记录走 continue 分支（在 attention 应答分支之前判断 `finished_at`）；每 tick 开头调 `state.purge_stale(root, now)` 做 24h 过期清理；doctor 增两行：`lock state`（当前 locked 值或 UNKNOWN）与 canary 统计（近 24h finished 段中 pane 尾部含 tab 字样但 matcher 为 None 的次数；统计源：daemon 写入的日志聚合文件或 state 计数，实现取简者）。
 
 - [ ] **Step 1: 写失败测试**：daemon 假 Deps 注入 `finished_at` 记录 + locked=True + 建议在场 → 断言 press 被调用且 action 行出现；locked=False → 零 press。doctor：注入样例断言两行输出。
 - [ ] **Step 2: 确认失败** → **Step 3: 实现** → **Step 4: `python -m pytest tests/ -q` 全绿** → **Step 5: `bash scripts/cc-autopilot-notify doctor` 新行 PASS**。
