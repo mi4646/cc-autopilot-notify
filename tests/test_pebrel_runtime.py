@@ -45,6 +45,20 @@ def test_paste_sends_text(monkeypatch):
     assert calls == [("pane.paste", {"pane_id": 3, "text": "按照你的建议来"})]
 
 
+def test_agents_filters_non_object_entries(monkeypatch):
+    monkeypatch.setattr(pebrel_runtime, "_call",
+                        lambda a, m, p: {"agents": [{"pane_id": 1}, "junk", None]})
+    assert pebrel_runtime.agents(Path("/tmp")) == [{"pane_id": 1}]
+
+
+def test_locate_skips_malformed_agent_entries(monkeypatch):
+    monkeypatch.setattr(pebrel_runtime, "agents", lambda a: [
+        {"pane_id": 9, "agent": "junk"},
+        {"pane_id": 2, "window_id": 1, "agent": {"session_id": "s1"}},
+    ])
+    assert pebrel_runtime.locate(Path("/tmp"), "s1") == (1, 2)
+
+
 def test_supports_conversation_true():
     desc = {"capabilities": ["conversation.read", "conversation.choose"]}
     assert pebrel_runtime.supports_conversation(desc) is True

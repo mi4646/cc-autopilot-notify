@@ -228,9 +228,15 @@ def _answer_sequence(pending: state.Pending, reading: dict,
                     presses = screen.plan_multi(question, text, indices)
             else:
                 decision = deps.judge_fn(question)
-                indices = [decision.index]
-                labels = [decision.label]
-                presses = screen.plan(question, text, decision.index)
+                if decision.delegate:
+                    indices = []
+                    labels = [judge.DELEGATE_TEXT]
+                    presses = screen.plan_free_text(question, text,
+                                                    judge.DELEGATE_TEXT)
+                else:
+                    indices = [decision.index]
+                    labels = [decision.label]
+                    presses = screen.plan(question, text, decision.index)
         except screen.ScreenMismatch:
             raise
         except Exception as exc:  # noqa: BLE001 - judge failure ends the record
@@ -460,7 +466,9 @@ def build_deps(appdata: Path, cfg: dict) -> Deps:
         return pebrel_runtime.agents(appdata)
 
     def do_judge(question: dict) -> "judge.Decision":
-        return judge.pick(question, model=config.judge_model(cfg))
+        return judge.pick(question, model=config.judge_model(cfg),
+                          timeout=config.judge_timeout_seconds(cfg),
+                          fallback=config.judge_fallback(cfg))
 
     def do_judge_multi(question: dict) -> "judge.Decision":
         return judge.pick_multi(question, model=config.judge_model(cfg))
@@ -484,6 +492,9 @@ def run(root: Path, cfg: dict, appdata: Path | None = None) -> None:
     """Loop forever. Used by the systemd unit."""
     from . import daemon_control
 
+    if not config.enabled(cfg):
+        log.info("daemon: disabled by config (enabled=false)")
+        return
     root = Path(root)
     lock = daemon_control.acquire_lock(root)
     if lock is None:
@@ -492,7 +503,7 @@ def run(root: Path, cfg: dict, appdata: Path | None = None) -> None:
     plugin_root = os.environ.get("CLAUDE_PLUGIN_ROOT") or str(
         Path(__file__).resolve().parent.parent)
     version = daemon_control.plugin_version(plugin_root)
-    appdata = appdata or Path("/mnt/c/Users/Anonymous/AppData/Roaming")
+    appdata = appdata or config.appdata_root()
     deps = build_deps(appdata, cfg)
     gate = PresenceGate()
     ticks = 0

@@ -86,7 +86,9 @@ def _call(appdata: Path, method: str, params: dict) -> dict:
     if not isinstance(reply, dict):
         raise RuntimeError(f"Pebrel runtime sent a non-object for {method}")
     if reply.get("ok") is False:
-        err = reply.get("error") or {}
+        err = reply.get("error")
+        if not isinstance(err, dict):
+            err = {"message": str(err)}
         raise RuntimeError(
             f"{method} refused: {err.get('code', 'unknown')} {err.get('message', '')}".strip()
         )
@@ -102,7 +104,9 @@ def agents(appdata: Path) -> list[dict]:
     """Every pane running an agent, with its session_id, window_id and pane_id."""
     result = _call(appdata, "agents.list", {})
     found = result.get("agents")
-    return found if isinstance(found, list) else []
+    if not isinstance(found, list):
+        return []
+    return [agent for agent in found if isinstance(agent, dict)]
 
 
 def locate(appdata: Path, session_id: str) -> tuple[int, int] | None:
@@ -113,7 +117,9 @@ def locate(appdata: Path, session_id: str) -> tuple[int, int] | None:
     `invalid_params`.
     """
     for agent in agents(appdata):
-        info = agent.get("agent") or {}
+        info = agent.get("agent")
+        if not isinstance(info, dict):
+            continue
         if info.get("session_id") == session_id:
             return int(agent.get("window_id", 0)), int(agent.get("pane_id", 0))
     return None

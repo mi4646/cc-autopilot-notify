@@ -10,6 +10,7 @@ from __future__ import annotations
 import http.client
 import json
 import logging
+import re
 import time
 import urllib.error
 import urllib.request
@@ -60,9 +61,23 @@ _COLORS = {
 }
 
 
+# Question bodies and option labels come from Claude, which can be shaped by
+# repository content. `<at id=all>` would ping everyone; `](` starts a link.
+_AT_TAG = re.compile(r"<at\b[^>]*>.*?</at>", re.IGNORECASE | re.DOTALL)
+
+
+def _escape_lark(text: str) -> str:
+    text = _AT_TAG.sub("", str(text))
+    text = text.replace("](", "] (")
+    return (text.replace("&", "&amp;")
+                .replace("<", "&lt;")
+                .replace(">", "&gt;"))
+
+
 def _field(label: str, value: str) -> dict:
     return {"is_short": True,
-            "text": {"tag": "lark_md", "content": f"**{label}**\n{value}"}}
+            "text": {"tag": "lark_md",
+                     "content": f"**{label}**\n{_escape_lark(value)}"}}
 
 
 def _timestamp(created_at: float) -> str:
@@ -86,7 +101,8 @@ def _card(n) -> dict:
             "header": {"template": _COLORS.get(n.event, "blue"),
                        "title": {"tag": "plain_text", "content": n.title}},
             "elements": [
-                {"tag": "div", "text": {"tag": "lark_md", "content": n.body}},
+                {"tag": "div", "text": {"tag": "lark_md",
+                                        "content": _escape_lark(n.body)}},
                 {"tag": "div", "fields": fields},
                 {"tag": "note", "elements": [
                     {"tag": "plain_text", "content": _timestamp(n.created_at)}]},

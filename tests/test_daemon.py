@@ -379,6 +379,71 @@ def test_multiselect_without_marker_delegates_as_free_text(tmp_path):
                     ("down", 1), ("enter", 1), ("enter", 1)], keys
 
 
+def test_single_select_delegate_pastes_free_text(tmp_path):
+    """judge.fallback=delegate turns a failed model call into free text."""
+    _record_questions(tmp_path, [
+        {"question": "Pick", "options": [{"label": "A"}, {"label": "B"}]},
+    ])
+    keys, pastes = [], []
+    deps = _screen_deps([
+        {"state": "attention",
+         "text": "❯ 1. A\n  2. B\n  3. Type something\n", "revision": "r1"},
+        {"state": "attention", "text": "Review your answers\nSubmit answers\n",
+         "revision": "r2"},
+        {"state": "done", "text": "", "revision": "r3"},
+    ], keys)
+    deps.judge_fn = lambda q: Decision(
+        indices=(), labels=(judge.DELEGATE_TEXT,),
+        reason="delegated", fallback=True, delegate=True)
+    deps.paste = lambda p, text: pastes.append(text) or {"ok": True}
+    daemon.tick(1000.0 + 150, tmp_path, _cfg(), deps)
+    assert pastes == [judge.DELEGATE_TEXT], pastes
+
+
+def test_press_refused_twice_gives_up(tmp_path):
+    _record_questions(tmp_path, [
+        {"question": "Q", "options": [{"label": "A"}, {"label": "B"}]}])
+    keys, notes = [], []
+    deps = _screen_deps([{"state": "attention", "text": "❯ 1. A\n  2. B\n",
+                          "revision": "r1"}], keys)
+    deps.press = lambda p, k, r: {"ok": False}
+    deps.notify = lambda m: notes.append(m)
+    for i in range(2):
+        daemon.tick(1000.0 + 150 + i, tmp_path, _cfg(), deps)
+    assert state.load_all(tmp_path) == []
+    assert notes
+
+
+def test_judge_failure_gives_up(tmp_path):
+    _record_questions(tmp_path, [
+        {"question": "Q", "options": [{"label": "A"}, {"label": "B"}]}])
+    keys, notes = [], []
+    deps = _screen_deps([{"state": "attention", "text": "❯ 1. A\n  2. B\n",
+                          "revision": "r1"}], keys)
+
+    def boom(q):
+        raise RuntimeError("gateway down")
+
+    deps.judge_fn = boom
+    deps.notify = lambda m: notes.append(m)
+    daemon.tick(1000.0 + 150, tmp_path, _cfg(), deps)
+    assert state.load_all(tmp_path) == []
+    assert notes
+
+
+def test_third_screen_mismatch_gives_up(tmp_path):
+    _record_questions(tmp_path, [
+        {"question": "Q", "options": [{"label": "A"}, {"label": "B"}]}])
+    keys, notes = [], []
+    deps = _screen_deps([{"state": "attention", "text": "❯ 1. X\n  2. Y\n",
+                          "revision": "r1"}], keys)
+    deps.notify = lambda m: notes.append(m)
+    for i in range(3):
+        daemon.tick(1000.0 + 150 + i, tmp_path, _cfg(), deps)
+    assert state.load_all(tmp_path) == []
+    assert notes
+
+
 def test_unanswered_question_keeps_the_record_when_screen_goes_foreign(tmp_path):
     _record_questions(tmp_path, [
         {"question": "Q1", "options": [{"label": "A"}, {"label": "B"}]},

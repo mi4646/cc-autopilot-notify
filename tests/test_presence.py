@@ -14,6 +14,35 @@ def test_default_timeout_covers_powershell_startup(monkeypatch):
     assert seen == [5.0]
 
 
+def test_sample_default_timeout_is_five_seconds(monkeypatch):
+    seen = []
+
+    def capture(_script, timeout, _powershell=None):
+        seen.append(timeout)
+        return "pebrel|12|1\n"
+
+    monkeypatch.setattr(presence, "_run_ps", capture)
+    presence.sample()
+    assert seen == [5.0]
+
+
+def test_run_ps_decodes_with_replacement(monkeypatch):
+    seen = {}
+
+    class Result:
+        stdout = "pebrel\n"
+        stderr = ""
+
+    def fake(*a, **k):
+        seen.update(k)
+        return Result()
+
+    monkeypatch.setattr(presence.subprocess, "run", fake)
+    presence._run_ps("x", 1.0)
+    assert seen["encoding"] == "utf-8"
+    assert seen["errors"] == "replace"
+
+
 def test_parses_foreground_match(monkeypatch):
     monkeypatch.setattr(presence, "_run_ps", lambda *a, **k: "pebrel\n")
     assert presence.is_foreground() is True

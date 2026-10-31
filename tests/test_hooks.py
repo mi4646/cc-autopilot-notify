@@ -32,6 +32,19 @@ def test_notification_channel_failure_still_returns_zero(tmp_path, monkeypatch):
     assert hook_pre_tool.handle(_auq_event(), tmp_path, cfg) == 0
 
 
+def test_unwritable_state_dir_still_sends(tmp_path, monkeypatch):
+    import cc_autopilot_notify.channels as channels
+
+    seen = []
+    monkeypatch.setattr(channels, "send_all", lambda n, c: seen.append(n) or [])
+    root = tmp_path / "state"
+    root.write_text("not a directory")
+    ev = {"hook_event_name": "Notification", "session_id": "s1",
+          "notification_type": "idle_prompt", "message": "waiting"}
+    hook_notify.handle(ev, root, {"channels": {}, "notify": {"dedupe_seconds": 300}})
+    assert seen, "state I/O failure must not drop the notification"
+
+
 def _capture(monkeypatch):
     import cc_autopilot_notify.channels as channels
     seen = []
@@ -150,12 +163,16 @@ def test_stop_failure_still_notifies(tmp_path, monkeypatch):
     assert [n.title for n in seen] == ["Claude 失败"]
 
 
-def test_post_tool_use_clears_pending(tmp_path):
+def test_post_tool_use_clears_the_panel_but_keeps_counts(tmp_path):
     hook_pre_tool.handle(_auq_event(), tmp_path, {"channels": {}, "thresholds": {}})
+    state.bump_continue("s1", tmp_path, failed=False)
     ev = {"hook_event_name": "PostToolUse", "tool_name": "AskUserQuestion",
           "session_id": "s1"}
     assert hook_notify.handle(ev, tmp_path, {"channels": {}}) == 0
-    assert state.load_all(tmp_path) == []
+    got = state.load_all(tmp_path)
+    assert len(got) == 1, "the record still owns the continuation counters"
+    assert got[0].questions == []
+    assert got[0].continue_count == 1
 
 
 def _idle_prompt(cwd=None):
@@ -194,10 +211,12 @@ def test_short_turn_is_not_notified_when_a_threshold_is_set(tmp_path, monkeypatc
 
 
 def test_long_turn_reports_its_duration(tmp_path, monkeypatch):
-    import time
+    from types import SimpleNamespace
 
+    now = 1_000_000.0
+    monkeypatch.setattr(hook_notify, "time", SimpleNamespace(time=lambda: now))
     seen = _capture(monkeypatch)
-    state.mark_turn_start("s1", tmp_path, time.time() - 125)
+    state.mark_turn_start("s1", tmp_path, now - 125)
     cfg = {"channels": {}, "notify": {"min_turn_seconds": 60}}
     hook_notify.handle(_idle_prompt(), tmp_path, cfg)
     assert [n.body for n in seen] == ["waiting · 耗时 2m05s"]

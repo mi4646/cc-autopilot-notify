@@ -6,6 +6,33 @@ import stat
 from cc_autopilot_notify import config
 
 
+def test_enabled_switch_reads_false(tmp_path):
+    assert config.enabled(config.load(tmp_path / "absent.json")) is True
+    p = tmp_path / "c.json"
+    p.write_text(json.dumps({"enabled": False}))
+    assert config.enabled(config.load(p)) is False
+
+
+def test_judge_disabled_returns_no_model(tmp_path):
+    p = tmp_path / "c.json"
+    p.write_text(json.dumps({"judge": {"enabled": False, "model": "m"}}))
+    assert config.judge_model(config.load(p)) is None
+
+
+def test_judge_timeout_and_fallback_are_read(tmp_path):
+    p = tmp_path / "c.json"
+    p.write_text(json.dumps({"judge": {"timeout_ms": 2500, "fallback": "delegate"}}))
+    cfg = config.load(p)
+    assert config.judge_timeout_seconds(cfg) == 2.5
+    assert config.judge_fallback(cfg) == "delegate"
+
+
+def test_afk_timeout_is_read(tmp_path):
+    p = tmp_path / "c.json"
+    p.write_text(json.dumps({"afk": {"set_claude_afk_timeout_ms": 600000}}))
+    assert config.afk_timeout_ms(config.load(p)) == 600000
+
+
 def test_missing_file_yields_defaults(tmp_path):
     cfg = config.load(tmp_path / "absent.json")
     assert config.foreground_seconds(cfg) == 150

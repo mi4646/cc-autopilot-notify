@@ -9,11 +9,44 @@ from cc_autopilot_notify.presence import Presence
 
 
 @pytest.fixture(autouse=True)
-def _stub_presence(monkeypatch):
-    """Doctor tests must never launch a real PowerShell process."""
+def _stub_host(monkeypatch, tmp_path):
+    """Doctor tests must never launch real PowerShell, claude, or read ~/.claude."""
     from cc_autopilot_notify import presence
+
     monkeypatch.setattr(
         presence, "sample", lambda: Presence(True, 1000.0))
+
+    class Result:
+        returncode = 0
+        stdout = "2.1.309"
+        stderr = ""
+
+    monkeypatch.setattr(doctor.subprocess, "run", lambda *a, **k: Result())
+    monkeypatch.setenv("CC_AUTOPILOT_SETTINGS",
+                       str(tmp_path / "settings-absent.json"))
+
+
+def test_doctor_fails_when_a_hook_recorded_a_config_error(tmp_path):
+    (tmp_path / "config_error.json").write_text(
+        json.dumps({"error": "quiet_hours.start must be HH:MM"}))
+    checks = doctor.run_all(
+        tmp_path, {"channels": {}}, probe=lambda: {},
+        presence_fn=lambda: Presence(True, 1.0))
+    check = {c.name: c for c in checks}["hook config errors"]
+    assert check.status == "FAIL"
+    assert "quiet_hours.start" in check.detail
+
+
+def test_cc_version_failure_is_not_a_pass(monkeypatch):
+    class Result:
+        returncode = 1
+        stdout = ""
+        stderr = "command not found"
+
+    monkeypatch.setattr(doctor.subprocess, "run", lambda *a, **k: Result())
+    check = doctor._cc_version()
+    assert check.status == "FAIL"
+    assert "exited 1" in check.detail
 
 
 def test_doctor_reports_presence_pass_with_idle(tmp_path):

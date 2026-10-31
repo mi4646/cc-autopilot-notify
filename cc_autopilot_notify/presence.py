@@ -98,6 +98,8 @@ def _run_ps(script: str, timeout: float, powershell: str | None = None) -> str:
         [exe, "-NoProfile", "-NonInteractive", "-Command", script],
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         timeout=timeout,
     )
     return (result.stdout or "").strip()
@@ -129,7 +131,7 @@ def _parse_sample(raw: str) -> tuple[str, float | None, bool | None]:
 
 
 def sample(powershell: str | None = None,
-           timeout: float = 1.5) -> Presence | None:
+           timeout: float = 5.0) -> Presence | None:
     """Foreground ownership, idle time and lock state from one PowerShell call.
 
     Returns None when PowerShell is unusable or the output has the wrong

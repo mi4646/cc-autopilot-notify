@@ -40,6 +40,19 @@ import dataclasses
 from cc_autopilot_notify import continuation, state
 
 
+def test_input_watch_resets_between_finished_segments(monkeypatch):
+    monkeypatch.setattr(continuation, "_INPUT_WATCH", {})
+    p1 = state.Pending(session_id="s1", window_id=1, pane_id=2, questions=[],
+                       appeared_at=0.0, last_activity=0.0, finished_at=1.0)
+    p2 = dataclasses.replace(p1, finished_at=2.0)
+
+    first = continuation._watch_input(p1, "")
+    assert first["saw_empty"] is True
+    continuation._watch_input(p1, "suggestion")
+    second = continuation._watch_input(p2, "suggestion")
+    assert second["saw_empty"] is False, "a new round must not inherit the old watch"
+
+
 @pytest.fixture(autouse=True)
 def _reset_watch():
     """The input watch is per-process global; tests must not inherit it."""

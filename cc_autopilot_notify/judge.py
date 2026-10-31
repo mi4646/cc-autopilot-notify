@@ -87,7 +87,7 @@ def marker_index(question: dict) -> int | None:
     return None
 
 
-def _ask_model(question: dict, model: str) -> int:
+def _ask_model(question: dict, model: str, timeout: float = 8.0) -> int:
     """Ask the gateway which option index to submit. Raises on any failure."""
     base = os.environ.get("ANTHROPIC_BASE_URL")
     token = os.environ.get("ANTHROPIC_AUTH_TOKEN")
@@ -117,19 +117,22 @@ def _ask_model(question: dict, model: str) -> int:
                  "Authorization": f"Bearer {token}"},
         method="POST",
     )
-    with urllib.request.urlopen(request, timeout=8) as response:
+    with urllib.request.urlopen(request, timeout=timeout) as response:
         payload = json.loads(response.read().decode("utf-8", errors="replace"))
     text = "".join(
         block.get("text", "") for block in payload.get("content", [])
         if isinstance(block, dict)
     ).strip()
-    digits = "".join(ch for ch in text if ch.isdigit())
-    if not digits:
-        raise RuntimeError(f"model reply had no number: {text[:80]!r}")
-    return int(digits[:3])
+    # Only a bare integer counts. Concatenating digits turned "1 (not 0)" into
+    # 10 and "-1" into 1: a valid-looking index pointing at the wrong option.
+    match = re.fullmatch(r"\s*(\d{1,3})\s*", text)
+    if not match:
+        raise RuntimeError(f"model reply was not a single number: {text[:80]!r}")
+    return int(match.group(1))
 
 
-def pick(question: dict, model: str | None, call_model=None) -> Decision:
+def pick(question: dict, model: str | None, call_model=None, *,
+         timeout: float = 8.0, fallback: str = "first_option") -> Decision:
     options = _labels(question)
     if not options:
         raise ValueError("question has no options to choose from")
@@ -142,11 +145,21 @@ def pick(question: dict, model: str | None, call_model=None) -> Decision:
 
     if model:
         ask = call_model or _ask_model
-        try:
-            index = ask(question, model)
-        except Exception as exc:  # noqa: BLE001 - every failure ends the same way
-            log.warning("judge: model call failed (%s); falling back to option 0", exc)
-            index = -1
+
+        def call() -> int:
+            # A caller-supplied stub keeps the two-argument shape used by tests.
+            return ask(question, model) if call_model is not None else ask(
+                question, model, timeout=timeout)
+
+        index = -1
+        for attempt in range(2):  # one retry, as the spec allows
+            try:
+                index = call()
+                break
+            except Exception as exc:  # noqa: BLE001 - every failure ends the same way
+                log.warning("judge: model call failed (attempt %d/2: %s)",
+                            attempt + 1, exc)
+                index = -1
         if 0 <= index < len(options):
             return Decision(indices=(index,),
                             labels=(str(options[index].get("label", "")),),
@@ -154,6 +167,10 @@ def pick(question: dict, model: str | None, call_model=None) -> Decision:
         if index != -1:
             log.warning("judge: model returned out-of-range index %s", index)
 
+    if fallback == "delegate":
+        return Decision(indices=(), labels=(DELEGATE_TEXT,),
+                        reason="no recommendation; delegated the choice back to Claude",
+                        fallback=True, delegate=True)
     return Decision(indices=(0,), labels=(str(options[0].get("label", "")),),
                     reason="no recommendation available; fell back to first option",
                     fallback=True)

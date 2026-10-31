@@ -63,6 +63,31 @@ def test_set_pane_does_not_resurrect_a_forgotten_record(tmp_path):
     assert state.load_all(tmp_path) == []
 
 
+def test_corrupt_record_is_dropped(tmp_path):
+    bad = tmp_path / "pending_bad.json"
+    bad.write_text("{not json")
+    assert state.load_all(tmp_path) == []
+    assert not bad.exists(), "an unparseable record would re-log every tick"
+
+
+def test_purge_stale_keeps_a_record_alive_via_finished_at(tmp_path):
+    p = _pending()
+    p.last_activity = 1000.0
+    p.finished_at = 5000.0
+    state.record(p, tmp_path)
+    state.purge_stale(tmp_path, now=1000.0 + 86401, max_age_seconds=86400)
+    assert state.load_all(tmp_path), "a recent finished round keeps the record"
+
+
+def test_clear_questions_keeps_continuation_counts(tmp_path):
+    state.record(_pending(), tmp_path)
+    state.bump_continue("s1", tmp_path, failed=False)
+    state.clear_questions("s1", tmp_path)
+    got = state.load_all(tmp_path)[0]
+    assert got.questions == []
+    assert got.continue_count == 1
+
+
 def test_corrupt_record_is_skipped_not_fatal(tmp_path):
     (tmp_path / "pending_s1.json").write_text("{broken")
     state.record(_pending("s2"), tmp_path)

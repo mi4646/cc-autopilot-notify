@@ -65,12 +65,20 @@ def _input_area(text: str) -> str | None:
     return parts[-2] if len(parts) >= 2 else None
 
 
-def _watch_input(sid: str, text: str) -> dict:
-    """Track the box across ticks; a keypress needs an empty→text transition."""
-    watch = _INPUT_WATCH.get(sid)
+def _watch_input(pending: state.Pending, text: str) -> dict:
+    """Track the box across ticks; a keypress needs an empty→text transition.
+
+    Keyed by (session, finished segment): a new round must not inherit the
+    previous round's "saw empty" or stability count.
+    """
+    key = f"{pending.session_id}:{pending.finished_at}"
+    watch = _INPUT_WATCH.get(key)
     if watch is None:
-        _INPUT_WATCH[sid] = {"text": text, "stable": 1, "saw_empty": text == ""}
-        return _INPUT_WATCH[sid]
+        if len(_INPUT_WATCH) > 256:
+            for old in list(_INPUT_WATCH)[:64]:
+                _INPUT_WATCH.pop(old, None)
+        _INPUT_WATCH[key] = {"text": text, "stable": 1, "saw_empty": text == ""}
+        return _INPUT_WATCH[key]
     if text == "":
         watch.update(text="", stable=0, saw_empty=True)
     elif watch["text"] == text:
@@ -173,7 +181,7 @@ def handle(pending: state.Pending, now: float, root: Path, cfg: dict,
     text = str(reading.get("text") or "")
     suggestion = match_suggestion(text)
     shadow = config.shadow_mode(cfg)
-    watch = _watch_input(pending.session_id, suggestion or "")
+    watch = _watch_input(pending, suggestion or "")
 
     if suggestion and shadow:
         log.info("continuation: SHADOW would press tab+enter for %s: %s",

@@ -4,8 +4,9 @@ Notifications and unattended auto-answer for Claude Code on WSL with the Pebrel
 terminal.
 
 When Claude asks a question and you are not there, this answers it — preferring
-the option Claude itself marked as recommended — and tells you through Feishu,
-the terminal, and a Windows toast.
+the option Claude itself marked as recommended — and tells you through a
+Feishu card. (Pebrel already owns the Windows toast; this plugin does not
+duplicate it.)
 
 ## How it works
 

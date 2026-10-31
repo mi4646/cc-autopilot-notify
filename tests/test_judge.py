@@ -70,6 +70,25 @@ def test_no_model_falls_back_to_first():
     assert (d.index, d.fallback) == (0, True)
 
 
+def test_fallback_delegate_returns_free_text():
+    q = _q([{"label": "A"}, {"label": "B"}])
+    d = judge.pick(q, model=None, fallback="delegate")
+    assert d.delegate is True
+    assert d.labels == (judge.DELEGATE_TEXT,)
+
+
+def test_model_failure_is_retried_once():
+    calls = []
+    q = _q([{"label": "A"}, {"label": "B"}])
+
+    def boom(*a):
+        calls.append(1)
+        raise RuntimeError("gateway down")
+
+    judge.pick(q, model="m", call_model=boom)
+    assert len(calls) == 2, "one retry is allowed before falling back"
+
+
 def test_model_index_out_of_range_falls_back():
     q = _q([{"label": "A"}, {"label": "B"}])
     d = judge.pick(q, model="m", call_model=lambda qq, mm: 7)

@@ -209,3 +209,28 @@ for command in commands:
         f"checkout path split into multiple argv tokens: {command}"
 PY
 echo "OK: paths with spaces stay a single token"
+
+# --- null sections are absent, not a crash -----------------------------
+N=$(mktemp -d)
+printf '%s' '{"env": null, "hooks": null}' > "$N/settings.json"
+CC_AUTOPILOT_SETTINGS="$N/settings.json" CC_AUTOPILOT_CONFIG="$N/cfg/config.json" \
+  CC_AUTOPILOT_UNIT="$N/unit.service" "$REPO/install.sh" >/dev/null \
+  || { echo "install crashed on null sections"; exit 1; }
+python3 - "$N/settings.json" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+assert d["env"]["CLAUDE_AFK_TIMEOUT_MS"] == 300000
+assert "PreToolUse" in d["hooks"]
+PY
+rm -rf "$N"
+echo "OK: null env/hooks sections are replaced"
+
+# --- uninstall writes the promised backup ------------------------------
+B=$(mktemp -d)
+printf '%s' '{"hooks": {}}' > "$B/settings.json"
+CC_AUTOPILOT_SETTINGS="$B/settings.json" CC_AUTOPILOT_CONFIG="$B/config.json" \
+  CC_AUTOPILOT_UNIT="$B/unit.service" "$REPO/uninstall.sh" >/dev/null
+ls "$B"/settings.json.bak-* >/dev/null 2>&1 \
+  || { echo "uninstall wrote no backup"; exit 1; }
+rm -rf "$B"
+echo "OK: uninstall backs up settings.json"

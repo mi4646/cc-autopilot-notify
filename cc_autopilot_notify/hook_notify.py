@@ -72,7 +72,12 @@ def _with_turn_duration(event: dict, root: Path, cfg: dict, kind: str,
     threshold = config.notify_min_turn_seconds(cfg)
     if kind != "idle_prompt" or threshold <= 0:
         return body
-    start = state.pop_turn_start(event.get("session_id") or "", root)
+    try:
+        start = state.pop_turn_start(event.get("session_id") or "", root)
+    except OSError as exc:
+        # Losing the duration must not lose the notification itself.
+        log.warning("notify: cannot read turn start (%s)", exc)
+        return body
     if start is None:
         return body
     elapsed = max(0, int(time.time() - start))
@@ -95,10 +100,15 @@ def _send(event: dict, root: Path, cfg: dict, *, kind: str, title: str,
     if window > 0:
         key = _seen_key(event.get("session_id") or "", kind, body)
         now = time.time()
-        if state.seen_recently(root, key, now=now, window=window):
-            log.debug("notify: duplicate %s suppressed", kind)
-            return
-        state.mark_seen(root, key, now=now)
+        try:
+            if state.seen_recently(root, key, now=now, window=window):
+                log.debug("notify: duplicate %s suppressed", kind)
+                return
+            state.mark_seen(root, key, now=now)
+        except OSError as exc:
+            # Dedupe state is an optimisation; an unwritable state dir must
+            # not swallow the notification it was meant to throttle.
+            log.warning("notify: cannot read/write dedupe state (%s)", exc)
     channels.send_all(
         channels.Notification(
             title=title, body=body,
@@ -164,7 +174,9 @@ def handle(event: dict, root: Path, cfg: dict) -> int:
     if name == "PostToolUse" and event.get("tool_name") == TOOL:
         session_id = event.get("session_id") or ""
         if session_id:
-            state.forget(session_id, root)
+            # Clear the panel only. The same record holds the continuation
+            # counters; deleting it would reset the per-round cap.
+            state.clear_questions(session_id, root)
         return 0
 
     if name == "StopFailure":

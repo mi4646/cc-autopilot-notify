@@ -8,19 +8,19 @@ re-investigation.
 from __future__ import annotations
 
 import dataclasses
+import json
 import logging
 import subprocess
 import time
 from pathlib import Path
 from typing import Callable
 
-from . import pebrel_runtime, state
+from . import config, pebrel_runtime, state
 from .migrate import _is_our_hook
 
 log = logging.getLogger(__name__)
 
 HEARTBEAT_STALE_SECONDS = 60.0
-DEFAULT_APPDATA = Path("/mnt/c/Users/Anonymous/AppData/Roaming")
 
 
 @dataclasses.dataclass
@@ -39,7 +39,23 @@ def _cc_version() -> Check:
         # A non-UTF-8 reply is not an OSError; powershell.exe on a Chinese
         # Windows writes GBK, which text=True cannot decode.
         return Check("claude version", "SKIP", f"cannot run claude: {exc}")
+    if out.returncode != 0:
+        # A failing command still writes to stderr; that is not a version.
+        return Check("claude version", "FAIL",
+                     f"claude --version exited {out.returncode}: {text[:120]}")
     return Check("claude version", "PASS" if text else "SKIP", text or "no output")
+
+
+def _config_error(root: Path) -> Check:
+    """A config error recorded by a hook, which cannot show stderr itself."""
+    path = Path(root) / "config_error.json"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return Check("hook config errors", "PASS", "no recorded config errors")
+    error = data.get("error") if isinstance(data, dict) else None
+    return Check("hook config errors", "FAIL",
+                 f"{error or 'invalid config'}; hooks are disabled until fixed")
 
 
 def _runtime(probe) -> list[Check]:
@@ -161,8 +177,8 @@ def run_all(root: Path, cfg: dict, probe: Callable[[], dict] | None = None,
 
     now = time.time() if now is None else now
     probe = probe or (lambda: pebrel_runtime.describe(
-        Path(cfg.get("_appdata") or DEFAULT_APPDATA)))
-    checks = [_cc_version()]
+        Path(cfg.get("_appdata") or config.appdata_root())))
+    checks = [_cc_version(), _config_error(Path(root))]
     checks.extend(_runtime(probe))
     checks.append(_powershell_presence(presence_fn or presence.sample))
     checks.append(_lock_state(presence_fn or presence.sample))

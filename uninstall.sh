@@ -12,7 +12,7 @@ UNIT="${CC_AUTOPILOT_UNIT:-$HOME/.config/systemd/user/cc-autopilot-notify.servic
 # the service removed but our hooks still registered.
 if [ -f "$SETTINGS" ]; then
   python3 - "$SETTINGS" <<'PY'
-import json, os, sys, tempfile
+import json, os, shutil, sys, tempfile, time
 path = sys.argv[1]
 try:
     with open(path, encoding="utf-8") as fh:
@@ -67,6 +67,13 @@ if hooks:
     data["hooks"] = hooks
 else:
     data.pop("hooks", None)
+
+# The README promises a backup before this file is rewritten.
+backup = f"{path}.bak-{time.strftime('%Y%m%d-%H%M%S')}"
+try:
+    shutil.copy2(path, backup)
+except OSError as exc:
+    sys.exit(f"refusing to rewrite {path}: cannot write backup ({exc})")
 
 # Write through a temp file: opening settings.json for writing truncates it
 # first, so a failure mid-dump would leave the file empty. mkstemp defaults to

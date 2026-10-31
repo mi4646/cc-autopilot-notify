@@ -12,7 +12,16 @@ REPO=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 SETTINGS="${CC_AUTOPILOT_SETTINGS:-$HOME/.claude/settings.json}"
 CONFIG="${CC_AUTOPILOT_CONFIG:-$HOME/.config/cc-autopilot-notify/config.json}"
 UNIT="${CC_AUTOPILOT_UNIT:-$HOME/.config/systemd/user/cc-autopilot-notify.service}"
-AFK_MS=300000
+# Honour a configured AFK timeout; fall back to the default when there is no
+# readable config yet (the normal first-install case).
+AFK_MS=$(PYTHONPATH="$REPO" python3 -c '
+import sys
+from cc_autopilot_notify import config
+try:
+    print(config.afk_timeout_ms(config.load(sys.argv[1])))
+except Exception:
+    print(300000)
+' "$CONFIG" 2>/dev/null || echo 300000)
 
 command -v python3 >/dev/null || { echo "python3 is required" >&2; exit 1; }
 
@@ -43,7 +52,10 @@ except UnicodeDecodeError as exc:
     # read. Refuse rather than overwrite a file we do not understand.
     sys.exit(f"refusing to touch {settings_path}: not UTF-8 ({exc})")
 
-data.setdefault("env", {})
+# A null section is valid JSON but not usable; treat it as absent rather than
+# crashing with AttributeError after the user already lost nothing.
+if not isinstance(data.get("env"), dict):
+    data["env"] = {}
 # Existing entries are stored as strings, so compare the rendered value: a
 # same-value string must not abort a fresh install.
 existing = data["env"].get("CLAUDE_AFK_TIMEOUT_MS")
@@ -58,7 +70,9 @@ if existing is not None and str(existing) != str(afk_ms):
 data["env"]["CLAUDE_AFK_TIMEOUT_MS"] = afk_ms
 
 runner = os.path.join(repo, "cc_autopilot_notify", "run_hook.py")
-hooks = data.setdefault("hooks", {})
+if not isinstance(data.get("hooks"), dict):
+    data["hooks"] = {}
+hooks = data["hooks"]
 
 def entry(module, matcher, timeout=10):
     # PYTHONPATH is set explicitly: a hook is launched by path from an arbitrary

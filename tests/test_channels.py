@@ -26,6 +26,17 @@ def test_feishu_rejects_non_200():
         channels.feishu.check_response(500, "boom")
 
 
+def test_feishu_card_neutralises_at_tags_and_links():
+    n = channels.Notification(
+        title="t", body="<at id=all></at> see [x](https://evil.example)",
+        project="demo", event="AskUserQuestion",
+        options=["<at id=all></at>"])
+    card = channels.feishu._card(n)
+    content = card["card"]["elements"][0]["text"]["content"]
+    assert "<at" not in content
+    assert "](" not in content
+
+
 def test_feishu_error_never_echoes_the_webhook():
     """The token lives in the URL path; an exception must not leak it."""
     secret = "https://open.feishu.cn/open-apis/bot/v2/hook/SECRET TOKEN"

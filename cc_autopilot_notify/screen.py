@@ -227,6 +227,13 @@ def match_question(questions: list[dict], text: str) -> tuple[int, dict] | None:
     return visible[0] if len(visible) == 1 else None
 
 
+_REVIEW_LINES = ("Review your answers", "Submit answers")
+
+
 def is_review_screen(text: str) -> bool:
-    """The final confirmation page shown after multi-question/multi-select."""
-    return "Review your answers" in text or "Submit answers" in text
+    """The final confirmation page shown after multi-question/multi-select.
+
+    Matched per line: a transcript that merely mentions "Submit answers" in
+    prose must not make us press Enter on whatever is focused.
+    """
+    return any(line.strip() in _REVIEW_LINES for line in text.splitlines())

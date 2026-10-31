@@ -207,3 +207,8 @@ def test_match_question_uses_the_prompt_to_disambiguate():
 def test_review_screen_detection():
     assert screen.is_review_screen("Review your answers\nSubmit answers\n")
     assert not screen.is_review_screen("❯ 1. A\n  2. B\n")
+
+
+def test_review_screen_ignores_prose_mentions():
+    prose = "We should Submit answers later, said the transcript\n❯ 1. A\n"
+    assert not screen.is_review_screen(prose)

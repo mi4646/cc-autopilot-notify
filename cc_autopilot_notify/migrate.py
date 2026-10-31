@@ -196,6 +196,7 @@ def migrate(settings: Path, config_path: Path, unit: Path,
 
     config_data = None
     moved = False
+    env_changed = False
     if isinstance(legacy_webhook, str) and legacy_webhook:
         cfg = _read_json(config_path)      # also aborts before any write
         channels = cfg.setdefault("channels", {})
@@ -204,9 +205,11 @@ def migrate(settings: Path, config_path: Path, unit: Path,
             feishu["webhook"] = legacy_webhook
             config_data = cfg
             moved = True
-            # The staged settings omit the env key, but they are committed
-            # second: a failed config write leaves the original env intact.
-            env.pop(WEBHOOK_ENV, None)
+        # Move the credential out of settings.json even when the config
+        # already has a webhook: leaving it behind contradicts the promise
+        # that re-running the migration finishes the job.
+        env.pop(WEBHOOK_ENV, None)
+        env_changed = True
 
     if env:
         data["env"] = env
@@ -222,7 +225,7 @@ def migrate(settings: Path, config_path: Path, unit: Path,
             # mode the pre-existing config had.
             staged.append((_stage_json(config_path, config_data, mode=0o600),
                            config_path))
-        if removed or moved:
+        if removed or moved or env_changed:
             staged.append((_stage_json(settings, data), settings))
     except (OSError, TypeError, ValueError) as exc:
         for tmp, _ in staged:
@@ -230,7 +233,7 @@ def migrate(settings: Path, config_path: Path, unit: Path,
         raise MigrationError(f"cannot stage migration output: {exc}") from exc
 
     backup = None
-    if removed or moved:
+    if removed or moved or env_changed:
         if settings.exists():
             try:
                 backup = _backup_settings(settings)

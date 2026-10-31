@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import logging
 import sys
+import time
 from pathlib import Path
 
 log = logging.getLogger(__name__)
@@ -40,6 +41,18 @@ def state_root() -> Path:
     return Path.home() / ".local" / "state" / "cc-autopilot-notify"
 
 
+def _record_config_error(exc: Exception) -> None:
+    """Leave a marker doctor can read: a hook's stderr is invisible to users."""
+    try:
+        root = state_root()
+        root.mkdir(parents=True, exist_ok=True)
+        (root / "config_error.json").write_text(
+            json.dumps({"at": time.time(), "error": str(exc)}, ensure_ascii=False),
+            encoding="utf-8")
+    except OSError:
+        pass
+
+
 def run_hook(handler) -> int:
     """Run `handler(event, root, cfg)`, never letting an exception escape."""
     from . import config
@@ -47,7 +60,13 @@ def run_hook(handler) -> int:
     try:
         event = read_event()
         cfg = config.load()
+        if not config.enabled(cfg):
+            return 0
         handler(event, state_root(), cfg)
+    except config.ConfigError as exc:
+        # Without a marker this silently turns every hook into a no-op.
+        _record_config_error(exc)
+        log.exception("hook: invalid config; hooks are disabled until it is fixed")
     except Exception:  # noqa: BLE001 - a hook must never wedge Claude Code
         log.exception("hook: unexpected failure")
     return 0

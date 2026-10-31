@@ -30,11 +30,12 @@ DEFAULTS: dict = {
     "thresholds": {"foreground_seconds": 150, "background_seconds": 90},
     "afk": {"set_claude_afk_timeout_ms": 300000},
     "judge": {"enabled": True, "model": None, "timeout_ms": 8000, "fallback": "first_option"},
+    # Terminal/Pebrel toasts were dropped at the owner's call; Feishu is the
+    # only channel. Keeping phantom sections here made users configure things
+    # that never ran.
     "channels": {
         "feishu": {"enabled": True, "webhook": None,
                    "webhook_env": "CC_AUTOPILOT_FEISHU_WEBHOOK"},
-        "terminal": {"enabled": True},
-        "pebrel": {"enabled": True},
     },
     "path_b": {"enabled": False},
     "daemon": {"enabled": True},
@@ -129,20 +130,16 @@ def _validate(cfg: dict) -> None:
         raise ConfigError(f"judge.fallback must be a non-empty string, got {fallback!r}")
 
     channels = _require_object(cfg, "channels")
-    for name in ("feishu", "terminal", "pebrel"):
-        if name not in channels:
-            continue
-        section = _require_object(channels, name)
-        _require_bool(section, "enabled", f"channels.{name}.enabled")
-        if name == "feishu":
-            env = section.get("webhook_env")
-            if not isinstance(env, str) or not env:
-                raise ConfigError(
-                    f"channels.feishu.webhook_env must be an env var name, got {env!r}")
-            webhook = section.get("webhook")
-            if webhook is not None and not isinstance(webhook, str):
-                raise ConfigError(
-                    f"channels.feishu.webhook must be a URL string or null, got {webhook!r}")
+    feishu = _require_object(channels, "feishu")
+    _require_bool(feishu, "enabled", "channels.feishu.enabled")
+    env = feishu.get("webhook_env")
+    if not isinstance(env, str) or not env:
+        raise ConfigError(
+            f"channels.feishu.webhook_env must be an env var name, got {env!r}")
+    webhook = feishu.get("webhook")
+    if webhook is not None and not isinstance(webhook, str):
+        raise ConfigError(
+            f"channels.feishu.webhook must be a URL string or null, got {webhook!r}")
 
     quiet = _require_object(cfg, "quiet_hours")
     _require_bool(quiet, "enabled", "quiet_hours.enabled")
@@ -261,6 +258,37 @@ def daemon_enabled(cfg: dict) -> bool:
     return _section(cfg, "daemon").get("enabled", True) is True
 
 
+def enabled(cfg: dict) -> bool:
+    """Top-level switch: false disables every hook and the daemon."""
+    return cfg.get("enabled", True) is True
+
+
+def judge_enabled(cfg: dict) -> bool:
+    return _section(cfg, "judge").get("enabled", True) is True
+
+
+def judge_timeout_seconds(cfg: dict) -> float:
+    return max(1, int(_section(cfg, "judge").get("timeout_ms", 8000))) / 1000.0
+
+
+def judge_fallback(cfg: dict) -> str:
+    value = _section(cfg, "judge").get("fallback", "first_option")
+    return value if value in ("first_option", "delegate") else "first_option"
+
+
+def afk_timeout_ms(cfg: dict) -> int:
+    return int(_section(cfg, "afk").get("set_claude_afk_timeout_ms", 300000))
+
+
+def appdata_root() -> Path:
+    """Where Pebrel keeps runtime.port, without hardcoding a Windows user."""
+    override = os.environ.get("CC_AUTOPILOT_APPDATA")
+    if override:
+        return Path(override)
+    user = os.environ.get("USERNAME") or os.environ.get("USER") or "Anonymous"
+    return Path("/mnt/c/Users") / user / "AppData/Roaming"
+
+
 def default_path() -> Path:
     override = os.environ.get("CC_AUTOPILOT_CONFIG")
     return Path(override) if override else (
@@ -293,6 +321,8 @@ def write_default(path: Path) -> None:
 
 
 def judge_model(cfg: dict) -> str | None:
+    if not judge_enabled(cfg):
+        return None
     return _section(cfg, "judge").get("model") or None
 
 

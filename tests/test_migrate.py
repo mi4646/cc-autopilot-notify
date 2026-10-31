@@ -91,7 +91,8 @@ def test_moves_webhook_from_env_into_config(tmp_path):
     assert stat.S_IMODE(config_path.stat().st_mode) == 0o600
 
 
-def test_keeps_existing_direct_webhook(tmp_path):
+def test_moves_legacy_webhook_even_when_config_has_one(tmp_path):
+    """Re-running the migration must finish the credential move."""
     settings = _settings(tmp_path, {
         "env": {"CC_AUTOPILOT_FEISHU_WEBHOOK": "https://old/x"},
         "hooks": {}})
@@ -102,8 +103,8 @@ def test_keeps_existing_direct_webhook(tmp_path):
                     run_systemctl=False)
     assert json.loads(config_path.read_text())["channels"]["feishu"]["webhook"] == \
         "https://new/x"
-    assert json.loads(settings.read_text())["env"]["CC_AUTOPILOT_FEISHU_WEBHOOK"] == \
-        "https://old/x"
+    data = json.loads(settings.read_text())
+    assert "CC_AUTOPILOT_FEISHU_WEBHOOK" not in data.get("env", {})
 
 
 def test_unit_removed_only_with_our_marker(tmp_path):

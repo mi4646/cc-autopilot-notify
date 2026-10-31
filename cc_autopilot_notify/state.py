@@ -72,7 +72,19 @@ def _atomic_write(path: Path, payload: dict) -> None:
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             json.dump(payload, handle, ensure_ascii=False)
+            # Without the fsync a power loss can leave the rename durable and
+            # the contents empty, which then looks like a corrupt record.
+            handle.flush()
+            os.fsync(handle.fileno())
         os.replace(tmp, path)
+        try:
+            dir_fd = os.open(path.parent, os.O_RDONLY)
+            try:
+                os.fsync(dir_fd)
+            finally:
+                os.close(dir_fd)
+        except OSError:
+            pass
     except BaseException:
         try:
             os.unlink(tmp)
@@ -108,7 +120,13 @@ def load_all(root: Path) -> list[Pending]:
             raw = json.loads(path.read_text(encoding="utf-8"))
             out.append(Pending(**raw))
         except (OSError, ValueError, TypeError) as exc:
-            log.warning("state: skipping unreadable record %s (%s)", path.name, exc)
+            # Skipping it only re-logs it twice per tick, forever. A record
+            # this daemon cannot parse will never become parseable.
+            log.warning("state: dropping unreadable record %s (%s)", path.name, exc)
+            try:
+                path.unlink()
+            except OSError:
+                pass
     return out
 
 
@@ -212,6 +230,15 @@ def record_questions(session_id: str, root: Path, *, pane_id: int,
         _atomic_write(path, dataclasses.asdict(pending))
 
 
+def clear_questions(session_id: str, root: Path) -> None:
+    """The panel is answered: clear it without resetting continuation counts."""
+    def change(p: Pending) -> None:
+        p.questions = []
+        p.choose_failures = 0
+
+    _mutate(session_id, root, change)
+
+
 def clear_finished(session_id: str, root: Path) -> None:
     """Human-initiated prompt: the round restarts from zero (spec D3)."""
     _mutate(session_id, root, lambda p: (
@@ -252,8 +279,22 @@ def purge_stale(root: Path, now: float, max_age_seconds: float = 86400.0) -> Non
     if not root.is_dir():
         return
     for pending in load_all(root):
-        if now - pending.last_activity > max_age_seconds:
+        # Activity is not only "we answered": a continuation press or a
+        # finished round also keeps the record alive.
+        last = max(pending.last_activity,
+                   pending.finished_at or 0.0,
+                   pending.pressed_at or 0.0,
+                   pending.last_auto_submit or 0.0)
+        if now - last > max_age_seconds:
             forget(pending.session_id, root)
+    # A process killed between mkstemp and replace leaves these behind, and
+    # nothing else ever looks at them.
+    for tmp in root.glob(".tmp-*.json"):
+        try:
+            if now - tmp.stat().st_mtime > max_age_seconds:
+                tmp.unlink()
+        except OSError:
+            pass
 
 
 def write_heartbeat(root: Path, when: float, *, pid: int | None = None,

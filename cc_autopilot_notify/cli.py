@@ -31,8 +31,6 @@ def _test_channel(name: str) -> int:
             print("feishu: no webhook configured", file=sys.stderr)
             return 1
         channels.feishu.send(notification, webhook)
-    elif name in ("terminal", "pebrel"):
-        getattr(channels, name).send(notification)
     else:
         print(f"unknown channel: {name}", file=sys.stderr)
         return 2
@@ -62,6 +60,9 @@ def _ensure_daemon() -> int:
     # status line goes to stderr. Nothing here may fail the session.
     try:
         cfg = config.load()
+        if not config.enabled(cfg):
+            print("daemon: disabled by config (enabled=false)", file=sys.stderr)
+            return 0
         if not config.daemon_enabled(cfg):
             print("daemon: disabled by config", file=sys.stderr)
             return 0
@@ -110,7 +111,7 @@ def main(argv: list[str] | None = None) -> int:
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("doctor", help="run self-checks")
     channel = sub.add_parser("test-channel", help="send a test notification")
-    channel.add_argument("name", choices=["feishu", "terminal", "pebrel"])
+    channel.add_argument("name", choices=["feishu"])
     sub.add_parser("daemon", help="run the polling daemon")
     sub.add_parser("ensure-daemon", help="start the daemon when it is not alive")
     sub.add_parser("stop-daemon", help="stop a running daemon")
