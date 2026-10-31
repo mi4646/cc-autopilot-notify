@@ -17,7 +17,7 @@ import time
 from pathlib import Path
 from typing import Callable
 
-from . import config, judge, pebrel_runtime, presence, screen, state
+from . import config, continuation, judge, pebrel_runtime, presence, screen, state
 from .channels import Notification, title_with_project
 
 log = logging.getLogger(__name__)
@@ -285,6 +285,11 @@ def _tick_one(pending: state.Pending, now: float, root: Path, cfg: dict,
         pending.window_id, pending.pane_id = located
         state.record(pending, root)
 
+    if pending.finished_at is not None:
+        actions.extend(continuation.handle(
+            pending, now, root, cfg, _continue_deps(deps)))
+        return
+
     try:
         reading = deps.read(pending)
     except Exception as exc:  # noqa: BLE001 - one bad pane must not stop the loop
@@ -364,6 +369,7 @@ def tick(now: float, root: Path, cfg: dict, deps: Deps, *, pid: int | None = Non
     state.write_heartbeat(root, when=now, pid=pid,
                           plugin_root=plugin_root, version=version)
     actions: list[str] = []
+    state.purge_stale(root, now)
     pendings = state.load_all(root)
     if not pendings:
         return actions
@@ -376,6 +382,22 @@ def tick(now: float, root: Path, cfg: dict, deps: Deps, *, pid: int | None = Non
         # before those presses for the next tick.
         gate.invalidate()
     return actions
+
+
+def _continue_deps(deps: Deps) -> "continuation.ContinueDeps":
+    def owner_ok(pending: state.Pending) -> bool:
+        """The record's session must still own the pane we are about to press
+        (codex 复核 #16: panes get reused)."""
+        try:
+            located = deps.locate(pending.session_id)
+        except Exception:  # noqa: BLE001 - an outage must not press keys
+            return False
+        return located is not None and located[1] == pending.pane_id
+
+    return continuation.ContinueDeps(
+        read=deps.read, press=deps.press,
+        fresh_presence=deps.sample,  # bypasses the 5s gate cache: fresh lock
+        pane_owner_ok=owner_ok, notify=deps.notify, sleep=deps.sleep)
 
 
 def build_deps(appdata: Path, cfg: dict) -> Deps:

@@ -623,3 +623,61 @@ def test_multiselect_notification_lists_every_chosen_label(tmp_path):
     note = deps.notes[0]
     assert "A、C" in note.body, "every chosen label must appear"
     assert "B" not in note.body, "unchosen label must not appear"
+
+
+def test_tick_continues_finished_record(tmp_path):
+    """A finished record under lock gets tab+enter via the continuation loop."""
+    import time as _time
+    from cc_autopilot_notify import continuation as cont
+    state.record(state.Pending(session_id="s1", window_id=1, pane_id=2,
+                               questions=[], appeared_at=_time.time() - 500.0,
+                               last_activity=_time.time() - 500.0,
+                               finished_at=_time.time() - 500.0), tmp_path)
+    presses, notified = [], []
+    deps = daemon.Deps(
+        read=lambda pending: {"state": "finished",
+                              "text": "─" * 60 + "\n❯ 生成一下周报\n" + "─" * 60},
+        press=lambda pending, key, repeat: presses.append(key) or {"ok": True},
+        sample=lambda: Presence(foreground=False, idle_seconds=900.0,
+                                locked=True),
+        judge_fn=lambda q: None,
+        notify=lambda n: notified.append(n),
+        locate=lambda sid: (1, 2),
+        judge_multi_fn=lambda q: None,
+        sleep=lambda s: None,
+    )
+    cfg = {"channels": {}, "thresholds": {}, "min_duration_seconds": 0,
+           "autopilot": {"continue_enabled": True, "shadow_mode": False,
+                         "max_continues": 10, "suggest_wait_seconds": 90,
+                         "failure_continues": 2}}
+    actions = daemon.tick(_time.time(), tmp_path, cfg, deps)
+    assert presses == ["tab", "enter"]
+    assert any("auto-continued" in a for a in actions)
+    assert notified and notified[0].event == "auto_continue"
+
+
+def test_tick_unlocked_never_presses(tmp_path):
+    import time as _time
+    state.record(state.Pending(session_id="s1", window_id=1, pane_id=2,
+                               questions=[], appeared_at=_time.time() - 500.0,
+                               last_activity=_time.time() - 500.0,
+                               finished_at=_time.time() - 500.0), tmp_path)
+    presses = []
+    deps = daemon.Deps(
+        read=lambda pending: {"state": "finished",
+                              "text": "─" * 60 + "\n❯ 生成一下周报\n" + "─" * 60},
+        press=lambda pending, key, repeat: presses.append(key) or {"ok": True},
+        sample=lambda: Presence(foreground=False, idle_seconds=900.0,
+                                locked=False),
+        judge_fn=lambda q: None,
+        notify=lambda n: None,
+        locate=lambda sid: (1, 2),
+        judge_multi_fn=lambda q: None,
+        sleep=lambda s: None,
+    )
+    cfg = {"channels": {}, "thresholds": {}, "min_duration_seconds": 0,
+           "autopilot": {"continue_enabled": True, "shadow_mode": False,
+                         "max_continues": 10, "suggest_wait_seconds": 90,
+                         "failure_continues": 2}}
+    daemon.tick(_time.time(), tmp_path, cfg, deps)
+    assert presses == []

@@ -114,6 +114,8 @@ def handle(pending: state.Pending, now: float, root: Path, cfg: dict,
         return []
 
     if not suggestion:
+        if "tab" in str(reading.get("text") or "").lower():
+            state.bump_canary(root, now)
         if (not pending.stage_card_sent and pending.finished_at is not None
                 and now >= _stage_deadline(pending, cfg)):
             state.mark_stage_card(pending.session_id, root, now)

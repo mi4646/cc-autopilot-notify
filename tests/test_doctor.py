@@ -155,3 +155,28 @@ def test_doctor_passes_for_another_projects_run_hook(tmp_path, monkeypatch):
     monkeypatch.setenv("CC_AUTOPILOT_SETTINGS", str(settings))
     checks = doctor.run_all(tmp_path, {"channels": {}}, probe=lambda: {})
     assert {c.name: c for c in checks}["legacy install"].status == "PASS"
+
+
+def test_doctor_reports_lock_state(tmp_path):
+    checks = doctor.run_all(
+        tmp_path, {"channels": {}}, probe=lambda: {},
+        presence_fn=lambda: Presence(True, 12.3, locked=True))
+    check = {c.name: c for c in checks}["windows lock state"]
+    assert check.status == "PASS" and "locked=True" in check.detail
+
+
+def test_doctor_lock_state_skip_when_unreadable(tmp_path):
+    checks = doctor.run_all(
+        tmp_path, {"channels": {}}, probe=lambda: {},
+        presence_fn=lambda: Presence(True, 12.3, locked=None))
+    check = {c.name: c for c in checks}["windows lock state"]
+    assert check.status == "SKIP"
+
+
+def test_doctor_canary_counts_blind_matches(tmp_path):
+    state.bump_canary(tmp_path, when=time.time())
+    checks = doctor.run_all(
+        tmp_path, {"channels": {}}, probe=lambda: {},
+        presence_fn=lambda: Presence(True, 12.3, locked=True))
+    check = {c.name: c for c in checks}["continuation canary"]
+    assert check.status == "FAIL" and "1" in check.detail

@@ -165,8 +165,32 @@ def run_all(root: Path, cfg: dict, probe: Callable[[], dict] | None = None,
     checks = [_cc_version()]
     checks.extend(_runtime(probe))
     checks.append(_powershell_presence(presence_fn or presence.sample))
+    checks.append(_lock_state(presence_fn or presence.sample))
     checks.append(_heartbeat(Path(root), now))
+    checks.append(_continuation_canary(Path(root), now))
     checks.append(_feishu(cfg))
     checks.append(_legacy_install())
     checks.append(_answers_probe())
     return checks
+
+
+def _lock_state(presence_fn) -> Check:
+    """Whether Windows reports the console locked right now (spec §3.1)."""
+    try:
+        sample = presence_fn()
+    except Exception as exc:  # noqa: BLE001
+        return Check("windows lock state", "FAIL", f"sample raised: {exc}")
+    if sample is None or getattr(sample, "locked", None) is None:
+        return Check("windows lock state", "SKIP", "lock state unreadable")
+    return Check("windows lock state", "PASS",
+                 f"locked={sample.locked}")
+
+
+def _continuation_canary(root: Path, now: float) -> Check:
+    """Matcher-blind finished segments today; >0 means the matcher is stale."""
+    count = state.read_canary(Path(root), now)
+    if count:
+        return Check("continuation canary", "FAIL",
+                     f"{count} tab-like tails matched no suggestion today; "
+                     "matcher may be stale")
+    return Check("continuation canary", "PASS", "0 blind matches today")

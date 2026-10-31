@@ -15,6 +15,7 @@ import math
 import os
 import re
 import tempfile
+import time
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -330,3 +331,39 @@ def pop_turn_start(session_id: str, root: Path) -> float | None:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
     return float(value)
+
+
+_CANARY = "canary.json"
+
+
+def bump_canary(root: Path, when: float) -> int:
+    """Count matcher-blind finished segments per day (doctor's canary).
+
+    A pane tail that mentions tab but matched no suggestion means the matcher
+    no longer recognises the UI — the feature is silently dead and this is the
+    only signal (spec 评审发现 8).
+    """
+    root = Path(root)
+    day = time.strftime("%Y-%m-%d", time.localtime(when))
+    with _locked(root):
+        path = root / _CANARY
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            data = {}
+        if not isinstance(data, dict):
+            data = {}
+        data = {k: v for k, v in data.items() if isinstance(v, int)}
+        data[day] = data.get(day, 0) + 1
+        _atomic_write(path, data)
+        return data[day]
+
+
+def read_canary(root: Path, when: float | None = None) -> int:
+    when = time.time() if when is None else when
+    day = time.strftime("%Y-%m-%d", time.localtime(when))
+    try:
+        data = json.loads((Path(root) / _CANARY).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return 0
+    return data.get(day, 0) if isinstance(data, dict) else 0
