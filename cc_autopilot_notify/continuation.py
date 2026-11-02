@@ -140,11 +140,28 @@ def pane_gone(pending: state.Pending, deps) -> bool | None:
     return not any(int(a.get("pane_id", 0)) == pending.pane_id for a in agents)
 
 
+# Pebrel reuses pane ids, so a record can point at a pane that now belongs to
+# a different conversation. These refusals say the recorded identity is not a
+# live conversation; a finished record then can never be continued, and
+# waiting cannot make it valid. Timeouts are excluded: those are outages.
+_ENDED_READ_ERRORS = ("conversation_ended", "invalid_params")
+
+
+def _conversation_ended(exc: Exception) -> bool:
+    message = str(exc)
+    return any(marker in message for marker in _ENDED_READ_ERRORS)
+
+
 def _drop_if_pane_gone(pending: state.Pending, root: Path, deps: ContinueDeps,
                        exc: Exception) -> None:
     """A finished record whose pane is gone is dead: forget it instead of
     retrying every second for 24h. An outage (agents snapshot itself fails)
     keeps the record — only a definitive absence counts as death."""
+    if _conversation_ended(exc):
+        log.info("continuation: %s conversation is gone (%s); dropping record",
+                 pending.session_id, exc)
+        state.forget(pending.session_id, root)
+        return
     gone = pane_gone(pending, deps)
     if gone is None:
         log.warning("continuation: read failed for %s (%s); agents unreachable, "

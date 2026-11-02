@@ -378,3 +378,36 @@ def test_read_failure_during_outage_keeps_record(tmp_path):
     deps.agents = outage_agents
     _run(state.load_all(tmp_path)[0], deps, tmp=tmp_path)
     assert state.load_all(tmp_path) != []  # 故障期间保留
+
+
+@pytest.mark.parametrize("error", [
+    "conversation.read refused: conversation_ended the Agent pane was closed or exited",
+    "conversation.read refused: invalid_params a current pane and native "
+    "conversation identity are required",
+])
+def test_read_failure_with_ended_conversation_forgets_record(tmp_path, error):
+    """pane 被复用后，旧会话的读取失败是终态，不能靠 pane_id 一直续命。"""
+    state.record(_pending(), tmp_path)
+    deps, presses, notified = _deps()
+
+    def ended_read(pending):
+        raise RuntimeError(error)
+
+    deps.read = ended_read
+    # pane 2 现在归别的会话（session_id 未知）：旧的 pane_id 判据会当成活着
+    deps.agents = staticmethod(lambda: [{"pane_id": 2, "agent": {"session_id": None}}])
+    _run(state.load_all(tmp_path)[0], deps, tmp=tmp_path)
+    assert state.load_all(tmp_path) == []
+
+
+def test_read_timeout_is_not_terminal(tmp_path):
+    """超时是运行时故障，不能当成会话结束清掉记录。"""
+    state.record(_pending(), tmp_path)
+    deps, presses, notified = _deps()
+
+    def timeout_read(pending):
+        raise RuntimeError("Pebrel runtime unreachable on port 55784: timed out")
+
+    deps.read = timeout_read
+    _run(state.load_all(tmp_path)[0], deps, tmp=tmp_path)
+    assert state.load_all(tmp_path) != []
